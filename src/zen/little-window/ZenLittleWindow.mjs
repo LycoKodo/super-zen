@@ -36,6 +36,10 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       // regular window opens with.
       root.removeAttribute("persist");
       root.removeAttribute("sizemode");
+      // A window that can't go fullscreen itself is an auxiliary one to
+      // macOS, which can open over a fullscreen window instead of switching
+      // to another Space. Read before the window is first shown.
+      root.setAttribute("macnativefullscreen", "false");
     }
   }
 
