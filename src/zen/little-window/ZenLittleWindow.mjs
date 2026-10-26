@@ -31,6 +31,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   // Set while the page is reopened in another container.
   #replacingTab = false;
   #openedInSpace = false;
+  #slidOut = false;
 
   constructor() {
     super();
@@ -45,6 +46,10 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       // macOS, which can open over a fullscreen window instead of switching
       // to another Space. Read before the window is first shown.
       root.setAttribute("macnativefullscreen", "false");
+      root.setAttribute(
+        "zen-little-window-theme",
+        Services.prefs.getStringPref("zen.little-window.theme", "cyber")
+      );
     }
   }
 
@@ -388,6 +393,26 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       };
       gBrowser.addProgressListener(listener);
     }
+    this.#revealWhenSettled();
+  }
+
+  /**
+   * Shows the window once it has settled, so nothing flashes: until the
+   * address bar opens for good, it opens and closes as focus moves.
+   */
+  #revealWhenSettled() {
+    const start = Date.now();
+    let steadyChecks = 0;
+    const check = () => {
+      const settled = !!window._zenLittleWindow.url || gURLBar.focused;
+      steadyChecks = settled ? steadyChecks + 1 : 0;
+      if (steadyChecks >= 2 || Date.now() - start > 600) {
+        lazy.ZenLittleWindows.reveal(window);
+      } else {
+        setTimeout(check, 30);
+      }
+    };
+    setTimeout(check, 30);
   }
 
   /**
@@ -434,21 +459,33 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   }
 
   #onClosing(event) {
-    if (event.type === "unload") {
+    // Saved as closing starts instead, before the window slides away.
+    if (event.type === "unload" && !this.#slidOut) {
       lazy.ZenLittleWindows.saveBounds(window);
     }
-    // A "close" stopped by the page doesn't close the window.
-    if (
-      !event.defaultPrevented &&
-      lazy.ZenLittleWindows.windowClosing(window, {
-        openedInSpace: this.#openedInSpace,
-      }) &&
-      event.cancelable
-    ) {
-      // Closed again once the app the window was opened from is in front.
-      event.preventDefault();
-      lazy.ZenLittleWindows.whenAppInactive(() => window.close());
+    // A "close" stopped by the page doesn't close the window, and the one
+    // that follows the slide out does.
+    if (event.defaultPrevented || event.target !== window || this.#slidOut) {
+      return;
     }
+    const wentBack = lazy.ZenLittleWindows.windowClosing(window, {
+      openedInSpace: this.#openedInSpace,
+    });
+    if (!event.cancelable) {
+      return;
+    }
+    // Closed again once out of sight and, if it went back to the app it was
+    // opened from, once that app is in front.
+    event.preventDefault();
+    lazy.ZenLittleWindows.saveBounds(window);
+    this.#slidOut = true;
+    lazy.ZenLittleWindows.slideOut(window, () => {
+      if (wentBack) {
+        lazy.ZenLittleWindows.whenAppInactive(() => window.close());
+      } else {
+        window.close();
+      }
+    });
   }
 
   /**

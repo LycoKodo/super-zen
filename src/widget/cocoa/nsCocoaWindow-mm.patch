@@ -173,12 +173,35 @@ index cd1cbea4e..478bcb670 100644
            [mWindow respondsToSelector:@selector(setAnimationBehavior:)]) {
          NSWindowAnimationBehavior behavior;
          if (mIsAnimationSuppressed) {
-@@ -8316,6 +8438,17 @@ + (NSUInteger)_validateStyleMask:(NSUInteger)aStyleMask {
+@@ -8316,6 +8438,40 @@ + (NSUInteger)_validateStyleMask:(NSUInteger)aStyleMask {
    return [super _validateStyleMask:(aStyleMask & ~keep)] | keep;
  }
  
 +- (void)setZenNeverMain:(BOOL)aValue {
 +  mZenNeverMain = aValue;
++}
++
++// Zen's little windows slide in from above the top of the screen, like a
++// dropdown terminal, which AppKit otherwise keeps titled windows from going
++// past. Front-end code lifts that while they move.
++static NSHashTable<NSWindow*>* sZenUnconstrainedWindows;
++
++- (void)setZenUnconstrained:(BOOL)aValue {
++  if (!sZenUnconstrainedWindows) {
++    sZenUnconstrainedWindows = [[NSHashTable weakObjectsHashTable] retain];
++  }
++  if (aValue) {
++    [sZenUnconstrainedWindows addObject:self];
++  } else {
++    [sZenUnconstrainedWindows removeObject:self];
++  }
++}
++
++- (NSRect)constrainFrameRect:(NSRect)aFrameRect toScreen:(NSScreen*)aScreen {
++  if ([sZenUnconstrainedWindows containsObject:self]) {
++    return aFrameRect;
++  }
++  return [super constrainFrameRect:aFrameRect toScreen:aScreen];
 +}
 +
 +- (BOOL)canBecomeMainWindow {

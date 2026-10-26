@@ -21,3 +21,8 @@
 # On macOS, the shortcut for little windows also works from other apps.
 - name: zen.little-window.global-shortcut
   value: true
+
+# "cyber": sky blue and white with cyan glows, after Blue Archive.
+# "space": the space's own colors, as Little Arc does.
+- name: zen.little-window.theme
+  value: "cyber"

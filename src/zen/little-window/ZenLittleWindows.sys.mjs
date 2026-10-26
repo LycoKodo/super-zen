@@ -21,9 +21,11 @@ const GLOBAL_SHORTCUT_PREF = "zen.little-window.global-shortcut";
  */
 class nsZenLittleWindows {
   #globalShortcut = null;
-  // The app that was in use when the global shortcut opened a window, by
-  // window, to go back to once it closes.
+  // The app that was in use when a window was opened from it, by window, to
+  // go back to once it closes.
   #previousApps = new WeakMap();
+  // Windows that are up but not shown yet, see #showSmoothly.
+  #unrevealed = new WeakSet();
   #hotKey = null;
 
   constructor() {
@@ -56,6 +58,8 @@ class nsZenLittleWindows {
     space = null,
     triggeringPrincipal = null,
   } = {}) {
+    const previousApp =
+      IS_MAC && !Cocoa.isAppActive() ? Cocoa.frontmostApp() : null;
     const { left, top, width, height } = this.#initialBounds(
       opener?.screen ?? this.#primaryScreen()
     );
@@ -81,6 +85,12 @@ class nsZenLittleWindows {
       url,
       triggeringPrincipal,
     };
+    if (IS_MAC) {
+      if (previousApp) {
+        this.#previousApps.set(win, previousApp);
+      }
+      this.#showSmoothly(win, { activate: !!previousApp });
+    }
     return win;
   }
 
@@ -223,16 +233,11 @@ class nsZenLittleWindows {
   }
 
   #onGlobalShortcut() {
-    const previousApp = Cocoa.isAppActive() ? null : Cocoa.frontmostApp();
     const opener = lazy.BrowserWindowTracker.getTopWindow({ private: false });
-    const win = opener?.gZenLittleWindow
-      ? opener.gZenLittleWindow.open()
-      : this.open();
-    if (!win) {
-      Cocoa.release(previousApp);
-    } else if (previousApp) {
-      this.#previousApps.set(win, previousApp);
-      this.#showOverOtherApp(win);
+    if (opener?.gZenLittleWindow) {
+      opener.gZenLittleWindow.open();
+    } else {
+      this.open();
     }
   }
 
@@ -322,11 +327,13 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Shows a little window over the app in use, like Little Arc. macOS only
-   * lets Zen become the active app right as the shortcut is pressed, and
-   * then brings forward Zen's key window, which would otherwise be the last
-   * regular window used. So the little window is put up first, unseen until
-   * its first paint.
+   * Shows a little window the way Little Arc does, over the app in use, and
+   * smoothly: it is put up unseen, and revealed once its toolbar and address
+   * bar have settled (see reveal), so nothing flashes as it starts.
+   *
+   * Put up early for another reason too: macOS only lets Zen become the
+   * active app right as the shortcut is pressed, and then brings forward
+   * Zen's key window, which would otherwise be the last regular window used.
    *
    * It joins the Space in use, even a fullscreen app's. macOS places a
    * window on a Space as it is first shown, and only lets an auxiliary,
@@ -335,8 +342,10 @@ class nsZenLittleWindows {
    * is key, so a click still brings Zen forward later.
    *
    * @param {Window} aWindow
+   * @param {object} options
+   * @param {boolean} options.activate - Make Zen the active app.
    */
-  #showOverOtherApp(aWindow) {
+  #showSmoothly(aWindow, { activate }) {
     let nativeWindow;
     try {
       nativeWindow = Cocoa.nativeWindow(aWindow);
@@ -362,31 +371,115 @@ class nsZenLittleWindows {
         Cocoa.objc.sendWithId,
         null
       );
-      Cocoa.call(
-        Cocoa.app,
-        "activateIgnoringOtherApps:",
-        Cocoa.objc.sendWithBool,
-        1
-      );
+      if (activate) {
+        Cocoa.call(
+          Cocoa.app,
+          "activateIgnoringOtherApps:",
+          Cocoa.objc.sendWithBool,
+          1
+        );
+      }
+      this.#unrevealed.add(aWindow);
       // Zen would show the window as usual, but finds it already up and
       // leaves it, so it never becomes the key window that way.
       aWindow.addEventListener(
         "MozAfterPaint",
-        () => {
-          Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 1);
-          this.#makeKeyOnceActive(aWindow, nativeWindow, view, Date.now());
-        },
+        () => this.#makeKeyOnceActive(aWindow, nativeWindow, view, Date.now()),
         { once: true }
       );
+      // In case the window never says it has settled.
+      lazy.setTimeout(() => this.reveal(aWindow), REVEAL_AT_THE_LATEST_MS);
     } catch (ex) {
-      console.error("Little windows: could not show over the app in use", ex);
+      console.error("Little windows: could not show smoothly", ex);
       if (nativeWindow) {
         Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 1);
         Cocoa.setNonActivating(nativeWindow, false);
       }
     }
   }
+
+  /**
+   * Shows a window put up by #showSmoothly the way Hyprland shows a dropdown
+   * terminal: it slides down into place from above the top of its screen,
+   * out from under the menu bar, and overshoots a little as it lands.
+   *
+   * @param {Window} aWindow
+   */
+  reveal(aWindow) {
+    if (!this.#unrevealed.has(aWindow) || aWindow.closed) {
+      return;
+    }
+    this.#unrevealed.delete(aWindow);
+    let nativeWindow;
+    try {
+      nativeWindow = Cocoa.nativeWindow(aWindow);
+      const frame = Cocoa.frame(nativeWindow);
+      Cocoa.setUnconstrained(nativeWindow, true);
+      Cocoa.setFrame(nativeWindow, {
+        ...frame,
+        y: Cocoa.screenTop(nativeWindow),
+      });
+      Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 1);
+      Cocoa.animate(nativeWindow, {
+        duration: SLIDE_IN_DURATION,
+        curve: OVERSHOOT_CURVE,
+        frame,
+      });
+      const target = nativeWindow;
+      lazy.setTimeout(
+        () => {
+          if (!aWindow.closed) {
+            Cocoa.setUnconstrained(target, false);
+          }
+        },
+        SLIDE_IN_DURATION * 1000 + 50
+      );
+    } catch (ex) {
+      console.error("Little windows: could not reveal", ex);
+      if (nativeWindow) {
+        Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 1);
+      }
+    }
+  }
+
+  /**
+   * Slides a window back up out of sight before it closes, as a dropdown
+   * terminal hides.
+   *
+   * @param {Window} aWindow
+   * @param {Function} aCallback - Called once it is out of sight.
+   */
+  slideOut(aWindow, aCallback) {
+    if (!IS_MAC || aWindow.closed) {
+      aCallback();
+      return;
+    }
+    try {
+      const nativeWindow = Cocoa.nativeWindow(aWindow);
+      Cocoa.setUnconstrained(nativeWindow, true);
+      Cocoa.animate(nativeWindow, {
+        duration: SLIDE_OUT_DURATION,
+        curve: EASE_IN_CURVE,
+        frame: {
+          ...Cocoa.frame(nativeWindow),
+          y: Cocoa.screenTop(nativeWindow),
+        },
+      });
+    } catch (ex) {
+      console.error("Little windows: could not slide out", ex);
+    }
+    lazy.setTimeout(aCallback, SLIDE_OUT_DURATION * 1000);
+  }
 }
+
+const IS_MAC = AppConstants.platform === "macosx";
+const REVEAL_AT_THE_LATEST_MS = 1500;
+const SLIDE_IN_DURATION = 0.5;
+const SLIDE_OUT_DURATION = 0.24;
+// An overshoot like Hyprland's (0.05, 0.9, 0.1, 1.1), eased in more gently:
+// over a slide the height of the screen, that one is over in a frame or two.
+const OVERSHOOT_CURVE = [0.2, 1.08, 0.4, 1];
+const EASE_IN_CURVE = [0.55, 0, 0.9, 0.4];
 
 // Section: macOS
 
@@ -532,9 +625,30 @@ const Cocoa = {
       sendWithBool: msgSend(ctypes.void_t, ctypes.signed_char),
       sendWithULong: msgSend(ctypes.void_t, ctypes.unsigned_long),
       sendDouble: msgSend(ctypes.void_t, ctypes.double),
+      sendRect: msgSend(this.NSRect),
+      sendWithRectBool: msgSend(ctypes.void_t, this.NSRect, ctypes.signed_char),
+      sendWith4Floats: msgSend(
+        id,
+        ctypes.float32_t,
+        ctypes.float32_t,
+        ctypes.float32_t,
+        ctypes.float32_t
+      ),
     };
     delete this.objc;
     return (this.objc = objc);
+  },
+
+  get NSRect() {
+    const { ctypes } = lazy;
+    const NSRect = new ctypes.StructType("NSRect", [
+      { x: ctypes.double },
+      { y: ctypes.double },
+      { width: ctypes.double },
+      { height: ctypes.double },
+    ]);
+    delete this.NSRect;
+    return (this.NSRect = NSRect);
   },
 
   call(aReceiver, aSelector, aSend = this.objc.sendId, ...aArgs) {
@@ -578,6 +692,96 @@ const Cocoa = {
         ? mask | NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL
         : mask & ~NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL
     );
+  },
+
+  /** @returns {{x: number, y: number, width: number, height: number}} */
+  frame(aNativeWindow) {
+    const { x, y, width, height } = this.call(
+      aNativeWindow,
+      "frame",
+      this.objc.sendRect
+    );
+    return { x, y, width, height };
+  },
+
+  setFrame(aNativeWindow, { x, y, width, height }) {
+    this.call(
+      aNativeWindow,
+      "setFrame:display:",
+      this.objc.sendWithRectBool,
+      new this.NSRect(x, y, width, height),
+      0
+    );
+  },
+
+  /**
+   * Animates a window's alpha and frame. AppKit runs it, off script.
+   *
+   * @param {CData} aNativeWindow
+   * @param {object} options
+   * @param {number} options.duration - In seconds.
+   * @param {number[]} options.curve - A cubic bezier's control points.
+   * @param {number} [options.alpha]
+   * @param {object} [options.frame]
+   */
+  animate(aNativeWindow, { duration, curve, alpha, frame }) {
+    const context = this.objc.getClass("NSAnimationContext");
+    this.call(context, "beginGrouping", this.objc.send);
+    try {
+      const current = this.call(context, "currentContext");
+      this.call(current, "setDuration:", this.objc.sendDouble, duration);
+      this.call(
+        current,
+        "setTimingFunction:",
+        this.objc.sendWithId,
+        this.call(
+          this.objc.getClass("CAMediaTimingFunction"),
+          "functionWithControlPoints::::",
+          this.objc.sendWith4Floats,
+          ...curve
+        )
+      );
+      const animator = this.call(aNativeWindow, "animator");
+      if (frame) {
+        const { x, y, width, height } = frame;
+        this.call(
+          animator,
+          "setFrame:display:",
+          this.objc.sendWithRectBool,
+          new this.NSRect(x, y, width, height),
+          1
+        );
+      }
+      if (alpha !== undefined) {
+        this.call(animator, "setAlphaValue:", this.objc.sendDouble, alpha);
+      }
+    } finally {
+      this.call(context, "endGrouping", this.objc.send);
+    }
+  },
+
+  // Lets a window go past the top of its screen, which AppKit doesn't let
+  // titled windows do (see BaseWindow's constrainFrameRect:toScreen:).
+  setUnconstrained(aNativeWindow, aValue) {
+    const selector = this.objc.selector("setZenUnconstrained:");
+    if (
+      this.call(
+        aNativeWindow,
+        "respondsToSelector:",
+        this.objc.sendBoolWithId,
+        selector
+      )
+    ) {
+      this.objc.sendWithBool(aNativeWindow, selector, aValue ? 1 : 0);
+    }
+  },
+
+  // Where a window's bottom edge goes for it to sit just above its screen,
+  // in AppKit's coordinates, which grow upwards.
+  screenTop(aNativeWindow) {
+    const screen = this.call(aNativeWindow, "screen");
+    const { y, height } = this.call(screen, "frame", this.objc.sendRect);
+    return y + height;
   },
 
   nativeWindow(aWindow) {
