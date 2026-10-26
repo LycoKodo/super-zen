@@ -60,6 +60,10 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     this.#buildToolbar();
     // gBrowser isn't set up yet, the window sees its tabs open all the same.
     window.addEventListener("TabOpen", this);
+    window.addEventListener("resize", this);
+    window.addEventListener("unload", () => this.#saveBounds(), {
+      once: true,
+    });
     gZenStartup.promiseInitialized.then(() => this.#onStartupDone());
   }
 
@@ -80,11 +84,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       return null;
     }
     const space = this.#resolveSpace(spaceId);
-    const width = Services.prefs.getIntPref("zen.little-window.width", 960);
-    const height = Services.prefs.getIntPref("zen.little-window.height", 680);
-    const { availLeft, availTop, availWidth, availHeight } = window.screen;
-    const left = Math.round(availLeft + (availWidth - width) / 2);
-    const top = Math.round(availTop + (availHeight - height) / 2);
+    const { left, top, width, height } = this.#initialBounds();
 
     const args = Cc["@mozilla.org/supports-string;1"].createInstance(
       Ci.nsISupportsString
@@ -101,6 +101,67 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     win._zenStartupUnsyncedUserContextId = this.#spaceContainerId(space);
     win._zenLittleWindow = { spaceId: space?.uuid ?? null, hasURL: !!url };
     return win;
+  }
+
+  /**
+   * Where a new little window opens: where the last one was left, as long as
+   * that is still on a screen, or else centered on this window's screen.
+   *
+   * @returns {{left: number, top: number, width: number, height: number}}
+   */
+  #initialBounds() {
+    let width = Services.prefs.getIntPref("zen.little-window.width", 960);
+    let height = Services.prefs.getIntPref("zen.little-window.height", 680);
+    const [left, top] = Services.prefs
+      .getStringPref("zen.little-window.position", "")
+      .split(",")
+      .map(value => parseInt(value, 10));
+    if (Number.isFinite(left) && Number.isFinite(top)) {
+      const screen = Cc["@mozilla.org/gfx/screenmanager;1"]
+        .getService(Ci.nsIScreenManager)
+        .screenForRect(left, top, width, height);
+      const availLeft = {},
+        availTop = {},
+        availWidth = {},
+        availHeight = {};
+      screen.GetAvailRectDisplayPix(availLeft, availTop, availWidth, availHeight);
+      width = Math.min(width, availWidth.value);
+      height = Math.min(height, availHeight.value);
+      // Screens may have been rearranged since: keep the window on one.
+      const clamp = (value, start, size, length) =>
+        Math.min(Math.max(value, start), start + size - length);
+      return {
+        left: clamp(left, availLeft.value, availWidth.value, width),
+        top: clamp(top, availTop.value, availHeight.value, height),
+        width,
+        height,
+      };
+    }
+    const { availLeft, availTop, availWidth, availHeight } = window.screen;
+    width = Math.min(width, availWidth);
+    height = Math.min(height, availHeight);
+    return {
+      left: Math.round(availLeft + (availWidth - width) / 2),
+      top: Math.round(availTop + (availHeight - height) / 2),
+      width,
+      height,
+    };
+  }
+
+  /**
+   * Remembers this little window's size and place for the next one, like
+   * Arc does. Windows don't say when they move, so this also runs on close.
+   */
+  #saveBounds() {
+    if (window.windowState !== window.STATE_NORMAL) {
+      return;
+    }
+    Services.prefs.setIntPref("zen.little-window.width", window.outerWidth);
+    Services.prefs.setIntPref("zen.little-window.height", window.outerHeight);
+    Services.prefs.setStringPref(
+      "zen.little-window.position",
+      `${window.screenX},${window.screenY}`
+    );
   }
 
   /**
@@ -309,9 +370,17 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     }
   }
 
+  #saveBoundsTimer = null;
+
   handleEvent(event) {
-    if (event.type === "TabOpen") {
-      this.#onTabOpen(event.target);
+    switch (event.type) {
+      case "TabOpen":
+        this.#onTabOpen(event.target);
+        break;
+      case "resize":
+        clearTimeout(this.#saveBoundsTimer);
+        this.#saveBoundsTimer = setTimeout(() => this.#saveBounds(), 500);
+        break;
     }
   }
 

@@ -13,3 +13,7 @@
 
 - name: zen.little-window.open-external-links
   value: true
+
+# Where the last little window was left, as "x,y". Empty to center them.
+- name: zen.little-window.position
+  value: ""
