@@ -177,9 +177,6 @@ zen-appmenu-new-little-window =
 
 zen-little-window-space-button =
     .title = Choose the space this page opens in
-zen-little-window-copy-url =
-    .label = Copy Link
-    .tooltiptext = Copy Link
 # Followed by the name of the space the page will be opened in.
 zen-little-window-open-in-label = Open in
 zen-little-window-open-in-menu =

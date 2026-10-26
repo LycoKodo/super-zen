@@ -12,6 +12,9 @@ ChromeUtils.defineESModuleGetters(lazy, {
 
 const LITTLE_WINDOW_ATTR = "zen-little-window";
 
+// Little Arc's corners, tighter than the 16px macOS gives windows like these.
+const MAC_CORNER_RADIUS = 14;
+
 /**
  * Little windows, after Arc's "Little Arc": a small, unsynced window for a
  * quick look at a page. It has no sidebar, only a slim toolbar, and the page
@@ -56,6 +59,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       return;
     }
     this.#targetSpaceId = window._zenLittleWindow.spaceId;
+    this.#setMacCornerRadius(MAC_CORNER_RADIUS);
     this.#addKeys();
     this.#buildToolbar();
     // gBrowser isn't set up yet, the window sees its tabs open all the same.
@@ -65,6 +69,70 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       once: true,
     });
     gZenStartup.promiseInitialized.then(() => this.#onStartupDone());
+  }
+
+  /**
+   * AppKit has no public way to change a window's corner radius, but it does
+   * take one through -[NSWindow _setCornerRadius:]. Skipped where that is
+   * gone, which only leaves macOS's own corners.
+   *
+   * @param {number} aRadius
+   */
+  #setMacCornerRadius(aRadius) {
+    if (AppConstants.platform !== "macosx") {
+      return;
+    }
+    let objc;
+    try {
+      const { ctypes } = ChromeUtils.importESModule(
+        "resource://gre/modules/ctypes.sys.mjs"
+      );
+      objc = ctypes.open("/usr/lib/libobjc.A.dylib");
+      const id = ctypes.voidptr_t;
+      const registerSelector = objc.declare(
+        "sel_registerName",
+        ctypes.default_abi,
+        id,
+        ctypes.char.ptr
+      );
+      const respondsToSelector = objc.declare(
+        "objc_msgSend",
+        ctypes.default_abi,
+        ctypes.signed_char,
+        id,
+        id,
+        id
+      );
+      const setRadius = objc.declare(
+        "objc_msgSend",
+        ctypes.default_abi,
+        ctypes.void_t,
+        id,
+        id,
+        ctypes.double
+      );
+      const nativeWindow = id(
+        ctypes.UInt64(
+          window.docShell.treeOwner.QueryInterface(Ci.nsIBaseWindow)
+            .nativeHandle
+        )
+      );
+      const selector = registerSelector("_setCornerRadius:");
+      if (
+        !nativeWindow.isNull() &&
+        respondsToSelector(
+          nativeWindow,
+          registerSelector("respondsToSelector:"),
+          selector
+        )
+      ) {
+        setRadius(nativeWindow, selector, aRadius);
+      }
+    } catch (ex) {
+      console.error("Little window: could not round its corners", ex);
+    } finally {
+      objc?.close();
+    }
   }
 
   // Section: opening
@@ -220,8 +288,13 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
 
   #buildToolbar() {
     const navBar = document.getElementById("nav-bar");
+    // Like Arc, the space sits inside the address pill, next to the address.
+    // skipintoolbarset keeps CustomizableUI from adding these to the toolbar
+    // layout of every window.
     const spaceItem = window.MozXULElement.parseXULToFragment(`
-      <toolbaritem id="zen-little-window-space-item" removable="false">
+      <toolbaritem id="zen-little-window-space-item"
+                   removable="false"
+                   skipintoolbarset="true">
         <html:button id="zen-little-window-space-button"
                      class="zen-little-window-pill"
                      data-l10n-id="zen-little-window-space-button">
@@ -231,13 +304,12 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
         <menupopup id="zen-little-window-space-popup"/>
       </toolbaritem>
     `);
-    navBar.prepend(spaceItem);
+    document.getElementById("nav-bar-customization-target").prepend(spaceItem);
 
     const actions = window.MozXULElement.parseXULToFragment(`
-      <toolbaritem id="zen-little-window-actions" removable="false">
-        <toolbarbutton id="zen-little-window-copy-url"
-                       class="toolbarbutton-1"
-                       data-l10n-id="zen-little-window-copy-url"/>
+      <toolbaritem id="zen-little-window-actions"
+                   removable="false"
+                   skipintoolbarset="true">
         <html:div id="zen-little-window-open-in">
           <html:button id="zen-little-window-open-in-button">
             <html:span data-l10n-id="zen-little-window-open-in-label"/>
@@ -265,11 +337,6 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     document
       .getElementById("zen-little-window-open-in-button")
       .addEventListener("click", () => this.openInSpace());
-    document
-      .getElementById("zen-little-window-copy-url")
-      .addEventListener("command", () => {
-        gZenCommonActions.copyCurrentURLToClipboard();
-      });
     this.#updateToolbar();
   }
 
@@ -312,11 +379,14 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     const iconElement = document.querySelector(
       ".zen-little-window-space-icon"
     );
-    if (icon.endsWith(".svg")) {
+    // Spaces named after their first letter get Arc's profile face instead.
+    const hasIcon = space && gZenWorkspaces.workspaceHasIcon(space);
+    iconElement.toggleAttribute("default-icon", !hasIcon);
+    if (hasIcon && icon.endsWith(".svg")) {
       iconElement.textContent = "";
       iconElement.style.backgroundImage = `url("${icon}")`;
     } else {
-      iconElement.textContent = icon;
+      iconElement.textContent = hasIcon ? icon : "";
       iconElement.style.backgroundImage = "";
     }
     document.getElementById("zen-little-window-open-in-shortcut").textContent =
