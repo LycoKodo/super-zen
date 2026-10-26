@@ -13,6 +13,7 @@ DIRS += [
     "drag-and-drop",
     "glance",
     "library",
+    "little-window",
     "live-folders",
     "media",
     "migration",

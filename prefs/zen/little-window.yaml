@@ -17,3 +17,7 @@
 # Where the last little window was left, as "x,y". Empty to center them.
 - name: zen.little-window.position
   value: ""
+
+# On macOS, the shortcut for little windows also works from other apps.
+- name: zen.little-window.global-shortcut
+  value: true

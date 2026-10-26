@@ -4,6 +4,12 @@
 
 import { nsZenMultiWindowFeature } from "chrome://browser/content/zen-components/ZenCommonUtils.mjs";
 
+const lazy = {};
+
+ChromeUtils.defineESModuleGetters(lazy, {
+  ZenLittleWindows: "resource:///modules/zen/ZenLittleWindows.sys.mjs",
+});
+
 const KEYCODE_MAP = {
   F1: "VK_F1",
   F2: "VK_F2",
@@ -1529,6 +1535,16 @@ window.gZenKeyboardShortcutsManager = {
 
       this._applyDevtoolsShortcuts(browser);
       mainKeyset.after(keyset);
+    }
+
+    // Like Little Arc's, the shortcut for little windows works from any app.
+    try {
+      lazy.ZenLittleWindows.setGlobalShortcut(
+        this.getShortcutFromCommand("cmd_zenOpenLittleWindow")?.toJSONForm() ??
+          null
+      );
+    } catch (e) {
+      console.error(e);
     }
   },
 

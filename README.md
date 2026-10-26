@@ -8,6 +8,7 @@
 > **Super Zen** is a fork of Zen with two things from Arc (branch `super-zen`):
 >
 > - **Little windows** (Arc's "Little Arc"): <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> or File › New Little Window opens a small window for a quick look at a page. Its toolbar shows the space the page is headed to, and **Open in _Space_** (<kbd>⌘</kbd><kbd>O</kbd>) moves it into that space. Links from other apps open in one too (`zen.little-window.open-external-links`).
+>   On macOS the shortcut works from any app while Super Zen is running: the window floats over the app in use, even a fullscreen one, and closing it goes back to that app (`zen.little-window.global-shortcut`). Arc takes the same shortcut while it runs.
 > - **Arc import**: `tools/arc-import/import_arc.py` brings over every Arc profile as its own container, with history, passwords, payment cards, cookies (so you stay signed in), spaces, pinned tabs and favorites.
 >
 > Sync is plain Firefox Sync, so sign in with your Mozilla account as in Zen. Build: `npm run init`, `npx surfer set brand superzen`, `npm run build`, then `cd engine && ./mach package`.

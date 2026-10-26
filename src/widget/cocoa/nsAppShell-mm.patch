@@ -1,0 +1,52 @@
+diff --git a/widget/cocoa/nsAppShell.mm b/widget/cocoa/nsAppShell.mm
+index 42d30e588edd58c0726700b6ba79e646dfacd1e0..44836c075bf4e3f16d8c07a60b7e305a699743ef 100644
+--- a/widget/cocoa/nsAppShell.mm
++++ b/widget/cocoa/nsAppShell.mm
+@@ -8,6 +8,7 @@
+  */
+ 
+ #import <Cocoa/Cocoa.h>
++#import <Carbon/Carbon.h>
+ 
+ #include <dlfcn.h>
+ 
+@@ -429,6 +430,28 @@ void nsAppShell::OnRunLoopActivityChanged(CFRunLoopActivity aActivity) {
+   }
+ }
+ 
++// Global hot keys, registered with RegisterEventHotKey, reach the app
++// whatever app is in front. Front-end code registers them and hears of them
++// through the "mac-hot-key-pressed" topic, whose data is the hot key's id.
++static OSStatus HotKeyPressed(EventHandlerCallRef, EventRef aEvent, void*) {
++  EventHotKeyID hotKeyId;
++  if (::GetEventParameter(aEvent, kEventParamDirectObject, typeEventHotKeyID,
++                          nullptr, sizeof(hotKeyId), nullptr,
++                          &hotKeyId) != noErr) {
++    return eventNotHandledErr;
++  }
++  NS_DispatchToMainThread(
++      NS_NewRunnableFunction("HotKeyPressed", [id = hotKeyId.id] {
++        if (nsCOMPtr<nsIObserverService> obs =
++                mozilla::services::GetObserverService()) {
++          nsAutoString data;
++          data.AppendInt(id);
++          obs->NotifyObservers(nullptr, "mac-hot-key-pressed", data.get());
++        }
++      }));
++  return noErr;
++}
++
+ // Init
+ //
+ // Loads the nib (see bug 316076c21) and sets up the CFRunLoopSource used to
+@@ -520,6 +543,10 @@ nsresult nsAppShell::Init() {
+     }
+ 
+     InitMemoryPressureObserver();
++
++    EventTypeSpec hotKeyPressed = {kEventClassKeyboard, kEventHotKeyPressed};
++    ::InstallApplicationEventHandler(HotKeyPressed, 1, &hotKeyPressed, nullptr,
++                                     nullptr);
+   }
+ 
+   nsresult rv = nsBaseAppShell::Init();

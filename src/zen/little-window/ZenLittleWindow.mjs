@@ -7,6 +7,7 @@ import { nsZenDOMOperatedFeature } from "chrome://browser/content/zen-components
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  ZenLittleWindows: "resource:///modules/zen/ZenLittleWindows.sys.mjs",
   ZenWindowSync: "resource:///modules/zen/ZenWindowSync.sys.mjs",
 });
 
@@ -29,6 +30,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   #initialTab = null;
   // Set while the page is reopened in another container.
   #replacingTab = false;
+  #openedInSpace = false;
 
   constructor() {
     super();
@@ -65,9 +67,11 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     // gBrowser isn't set up yet, the window sees its tabs open all the same.
     window.addEventListener("TabOpen", this);
     window.addEventListener("resize", this);
-    window.addEventListener("unload", () => this.#saveBounds(), {
-      once: true,
-    });
+    // Closing starts with "DOMWindowClose" from a script (Accel+W) and with
+    // "close" from the window's close button.
+    window.addEventListener("DOMWindowClose", this);
+    window.addEventListener("close", this);
+    window.addEventListener("unload", this, { once: true });
     gZenStartup.promiseInitialized.then(() => this.#onStartupDone());
   }
 
@@ -153,92 +157,12 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     if (!this.enabled || PrivateBrowsingUtils.isWindowPrivate(window)) {
       return null;
     }
-    const space = this.#resolveSpace(spaceId);
-    const { left, top, width, height } = this.#initialBounds();
-
-    // The page is loaded once the window is up: a single URL argument would
-    // be split on "|" and loaded as several pages.
-    const args = Cc["@mozilla.org/supports-string;1"].createInstance(
-      Ci.nsISupportsString
-    );
-    args.data = "about:blank";
-    const win = OpenBrowserWindow({
-      args,
-      features: `width=${width},height=${height},left=${left},top=${top}`,
-      zenSyncedWindow: false,
-    });
-    // Whatever "zen.window-sync.prefer-unsynced-windows" says, a little
-    // window is never synced.
-    win._zenStartupSyncFlag = "unsynced";
-    win._zenStartupUnsyncedUserContextId = this.#spaceContainerId(space);
-    win._zenLittleWindow = {
-      spaceId: space?.uuid ?? null,
+    return lazy.ZenLittleWindows.open({
+      opener: window,
       url,
+      space: this.#resolveSpace(spaceId),
       triggeringPrincipal,
-    };
-    return win;
-  }
-
-  /**
-   * Where a new little window opens: where the last one was left, as long as
-   * that is still on a screen, or else centered on this window's screen.
-   *
-   * @returns {{left: number, top: number, width: number, height: number}}
-   */
-  #initialBounds() {
-    let width = Services.prefs.getIntPref("zen.little-window.width", 960);
-    let height = Services.prefs.getIntPref("zen.little-window.height", 680);
-    const [left, top] = Services.prefs
-      .getStringPref("zen.little-window.position", "")
-      .split(",")
-      .map(value => parseInt(value, 10));
-    if (Number.isFinite(left) && Number.isFinite(top)) {
-      const screen = Cc["@mozilla.org/gfx/screenmanager;1"]
-        .getService(Ci.nsIScreenManager)
-        .screenForRect(left, top, width, height);
-      const availLeft = {},
-        availTop = {},
-        availWidth = {},
-        availHeight = {};
-      screen.GetAvailRectDisplayPix(availLeft, availTop, availWidth, availHeight);
-      width = Math.min(width, availWidth.value);
-      height = Math.min(height, availHeight.value);
-      // Screens may have been rearranged since: keep the window on one.
-      const clamp = (value, start, size, length) =>
-        Math.min(Math.max(value, start), start + size - length);
-      return {
-        left: clamp(left, availLeft.value, availWidth.value, width),
-        top: clamp(top, availTop.value, availHeight.value, height),
-        width,
-        height,
-      };
-    }
-    const { availLeft, availTop, availWidth, availHeight } = window.screen;
-    width = Math.min(width, availWidth);
-    height = Math.min(height, availHeight);
-    return {
-      left: Math.round(availLeft + (availWidth - width) / 2),
-      top: Math.round(availTop + (availHeight - height) / 2),
-      width,
-      height,
-    };
-  }
-
-  /**
-   * Remembers this little window's size and place for the next one, like
-   * Arc does. Windows don't say when they move, so this also runs on close.
-   */
-  #saveBounds() {
-    if (window.windowState !== window.STATE_NORMAL) {
-      return;
-    }
-    // The width and height a window is opened with are its inner size.
-    Services.prefs.setIntPref("zen.little-window.width", window.innerWidth);
-    Services.prefs.setIntPref("zen.little-window.height", window.innerHeight);
-    Services.prefs.setStringPref(
-      "zen.little-window.position",
-      `${window.screenX},${window.screenY}`
-    );
+    });
   }
 
   /**
@@ -376,9 +300,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     )) {
       element.textContent = space?.name ?? "";
     }
-    const iconElement = document.querySelector(
-      ".zen-little-window-space-icon"
-    );
+    const iconElement = document.querySelector(".zen-little-window-space-icon");
     // Spaces named after their first letter get Arc's profile face instead.
     const hasIcon = space && gZenWorkspaces.workspaceHasIcon(space);
     iconElement.toggleAttribute("default-icon", !hasIcon);
@@ -431,6 +353,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     this.#initialTab = gBrowser.selectedTab;
     // Spaces are only known once the window has fully started.
     this.#updateToolbar();
+    // Opened without a space to aim at, the window doesn't know which
+    // container to start in.
+    this.#matchSpaceContainer();
     const { url, triggeringPrincipal } = window._zenLittleWindow;
     if (url) {
       gBrowser.selectedBrowser.fixupAndLoadURIString(url, {
@@ -439,18 +364,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
           Services.scriptSecurityManager.getSystemPrincipal(),
       });
     } else {
-      // Ask where to go straight away, the same way Arc does. The page takes
-      // focus once the window gets activated and once it finishes loading, so
-      // ask again then, as long as nothing was picked yet.
-      const openLocation = () =>
-        setTimeout(() => {
-          if (
-            !gURLBar.focused &&
-            gBrowser.selectedBrowser.currentURI.spec === "about:blank"
-          ) {
-            document.getElementById("Browser:OpenLocation").doCommand();
-          }
-        }, 0);
+      // Ask where to go straight away. The page takes focus once the window
+      // gets activated and once it finishes loading, so ask again then.
+      const openLocation = () => this.askForLocation();
       openLocation();
       if (Services.focus.activeWindow !== window) {
         window.addEventListener("activate", openLocation, { once: true });
@@ -474,6 +390,24 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     }
   }
 
+  /**
+   * Opens the address bar, the same way Arc does, for a window opened
+   * without a page where nothing was picked yet.
+   */
+  askForLocation() {
+    if (!this.#initialTab || window._zenLittleWindow.url) {
+      return;
+    }
+    setTimeout(() => {
+      if (
+        !gURLBar.focused &&
+        gBrowser.selectedBrowser.currentURI.spec === "about:blank"
+      ) {
+        document.getElementById("Browser:OpenLocation").doCommand();
+      }
+    }, 0);
+  }
+
   #saveBoundsTimer = null;
 
   handleEvent(event) {
@@ -483,11 +417,37 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
         break;
       case "resize":
         clearTimeout(this.#saveBoundsTimer);
-        this.#saveBoundsTimer = setTimeout(() => this.#saveBounds(), 500);
+        this.#saveBoundsTimer = setTimeout(
+          () => lazy.ZenLittleWindows.saveBounds(window),
+          500
+        );
         break;
       case "keydown":
         this.#onKeyDown(event);
         break;
+      case "DOMWindowClose":
+      case "close":
+      case "unload":
+        this.#onClosing(event);
+        break;
+    }
+  }
+
+  #onClosing(event) {
+    if (event.type === "unload") {
+      lazy.ZenLittleWindows.saveBounds(window);
+    }
+    // A "close" stopped by the page doesn't close the window.
+    if (
+      !event.defaultPrevented &&
+      lazy.ZenLittleWindows.windowClosing(window, {
+        openedInSpace: this.#openedInSpace,
+      }) &&
+      event.cancelable
+    ) {
+      // Closed again once the app the window was opened from is in front.
+      event.preventDefault();
+      lazy.ZenLittleWindows.whenAppInactive(() => window.close());
     }
   }
 
@@ -522,14 +482,17 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
    * @param {object} aSpace
    */
   setTargetSpace(aSpace) {
-    const previous = this.targetSpace;
     this.#targetSpaceId = aSpace.uuid;
     this.#updateToolbar();
-    const userContextId = this.#spaceContainerId(aSpace);
-    if (userContextId === this.#spaceContainerId(previous)) {
+    this.#matchSpaceContainer();
+  }
+
+  #matchSpaceContainer() {
+    const userContextId = this.#spaceContainerId(this.targetSpace);
+    const oldTab = gBrowser.selectedTab;
+    if (oldTab.userContextId === userContextId) {
       return;
     }
-    const oldTab = gBrowser.selectedTab;
     const uri = oldTab.linkedBrowser.currentURI;
     let newTab;
     this.#replacingTab = true;
@@ -543,7 +506,10 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     }
     this.#initialTab = newTab;
     gBrowser.selectedTab = newTab;
-    gBrowser.removeTab(oldTab, { animate: false, closeWindowWithLastTab: false });
+    gBrowser.removeTab(oldTab, {
+      animate: false,
+      closeWindowWithLastTab: false,
+    });
   }
 
   /**
@@ -558,6 +524,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     const tabs = gBrowser.tabs.filter(
       tab => !tab.hasAttribute("zen-empty-tab") && !tab.closing
     );
+    this.#openedInSpace = true;
     this.#sendTabs(tabs, aSpace, { closeWindow: true });
   }
 
