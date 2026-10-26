@@ -4,6 +4,14 @@
    - file, You can obtain one at http://mozilla.org/MPL/2.0/.
    -->
 <!-- TODO: Get a job -->
+> [!NOTE]
+> **Super Zen** is a fork of Zen with two things from Arc (branch `super-zen`):
+>
+> - **Little windows** (Arc's "Little Arc"): <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> or File › New Little Window opens a small window for a quick look at a page. Its toolbar shows the space the page is headed to, and **Open in _Space_** (<kbd>⌘</kbd><kbd>O</kbd>) moves it into that space. Links from other apps open in one too (`zen.little-window.open-external-links`).
+> - **Arc import**: `tools/arc-import/import_arc.py` brings over every Arc profile as its own container, with history, passwords, cookies (so you stay signed in), spaces and pinned tabs.
+>
+> Sync is plain Firefox Sync, so sign in with your Mozilla account as in Zen. Build: `npm run init`, `npx surfer set brand superzen`, `npm run build`, then `cd engine && ./mach package`.
+
 <img src="./docs/assets/zen-dark.svg" width="100px" align="left">
 
 ### `Zen Browser`

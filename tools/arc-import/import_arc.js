@@ -8,8 +8,8 @@
  *
  *  - Every Arc profile becomes a container, except the one of the first
  *    space, which uses the default container.
- *  - History, passwords, form data and extensions of every profile go
- *    through Zen's own Arc migrator.
+ *  - History, passwords, form data, payment cards and extensions of every
+ *    profile go through Zen's own Arc migrator.
  *  - Cookies, which no migrator imports, are decrypted with Arc's keychain
  *    key and added to the profile's container, so accounts stay signed in.
  *  - Spaces, pinned tabs, folders and favorites are created from Arc's
@@ -263,7 +263,11 @@ async function importCookies(key, profileDir, userContextId) {
 async function importProfileData(migrator, profile) {
   const types = MigrationUtils.resourceTypes;
   let items =
-    types.HISTORY | types.PASSWORDS | types.FORMDATA | types.BOOKMARKS;
+    types.HISTORY |
+    types.PASSWORDS |
+    types.FORMDATA |
+    types.BOOKMARKS |
+    types.PAYMENT_METHODS;
   if (options.extensions) {
     items |= types.EXTENSIONS;
   }
@@ -284,6 +288,10 @@ async function importProfileData(migrator, profile) {
   Services.prefs.setBoolPref(
     "browser.migrate.chrome.extensions.enabled",
     !!options.extensions
+  );
+  Services.prefs.setBoolPref(
+    "browser.migrate.chrome.payment_methods.enabled",
+    true
   );
   // Arc's bookmarks are its sidebar, which is imported as spaces below.
   Services.prefs.setBoolPref(
