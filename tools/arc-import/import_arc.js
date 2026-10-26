@@ -54,6 +54,18 @@ const SESSION_COOKIE_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 const report = { containers: {}, profiles: {}, spaces: 0, errors: [] };
 
+// What earlier, interrupted runs already imported, so a rerun picks up
+// where they stopped instead of importing things twice.
+const PROGRESS_PREF = "zen.arc-import.progress";
+const progress = JSON.parse(
+  Services.prefs.getStringPref(PROGRESS_PREF, "{}") || "{}"
+);
+progress.profiles ??= [];
+progress.cookies ??= [];
+function saveProgress() {
+  Services.prefs.setStringPref(PROGRESS_PREF, JSON.stringify(progress));
+}
+
 function logError(where, ex) {
   report.errors.push(`${where}: ${ex?.message ?? ex}`);
 }
@@ -282,6 +294,15 @@ async function importProfileData(migrator, profile) {
 (async () => {
   const userData = PathUtils.join(arcRoot, "User Data");
 
+  // The keychain is asked first, once: with "Always Allow", the migrator's
+  // own requests for the same item go through without asking again.
+  let key = null;
+  try {
+    key = await cookieKey();
+  } catch (ex) {
+    logError("keychain", ex);
+  }
+
   // A full import: all of history, not only recent pages.
   Services.prefs.setIntPref("browser.migrate.chrome.history.limit", 0);
   Services.prefs.setIntPref("browser.migrate.history.maxAgeInDays", 36500);
@@ -332,9 +353,15 @@ async function importProfileData(migrator, profile) {
       entry.migrator = "not offered";
       continue;
     }
+    if (progress.profiles.includes(profile.dir)) {
+      entry.migrator = "already imported";
+      continue;
+    }
     try {
       await importProfileData(migrator, source);
       entry.migrator = "ok";
+      progress.profiles.push(profile.dir);
+      saveProgress();
     } catch (ex) {
       entry.migrator = "failed";
       logError(`migrator ${profile.name}`, ex);
@@ -342,20 +369,20 @@ async function importProfileData(migrator, profile) {
   }
 
   // Cookies.
-  let key = null;
-  try {
-    key = await cookieKey();
-  } catch (ex) {
-    logError("keychain", ex);
-  }
   if (key) {
     for (const profile of profiles) {
+      if (progress.cookies.includes(profile.dir)) {
+        report.profiles[profile.name].cookies = "already imported";
+        continue;
+      }
       try {
         report.profiles[profile.name].cookies = await importCookies(
           key,
           PathUtils.join(userData, profile.dir),
           containerFor.get(profile.dir) ?? 0
         );
+        progress.cookies.push(profile.dir);
+        saveProgress();
       } catch (ex) {
         logError(`cookies ${profile.name}`, ex);
       }
@@ -363,12 +390,14 @@ async function importProfileData(migrator, profile) {
   }
 
   // Spaces, each in its profile's container.
-  if (options.spaces) {
+  if (options.spaces && !progress.spaces) {
     for (const space of plan.spaces) {
       space.userContextId = containerFor.get(space.profile ?? mainProfile) ?? 0;
     }
     try {
       report.spaces = await ZenMigrationUtils.applyArcSidebar(plan);
+      progress.spaces = true;
+      saveProgress();
     } catch (ex) {
       logError("spaces", ex);
     }

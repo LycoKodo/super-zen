@@ -81,11 +81,13 @@ def main():
     proc = launch(opts.app, opts.profile)
     client = connect()
     script = (HERE / "import_arc.js").read_text()
-    print("Importing from Arc. If macOS asks about \"Arc Safe Storage\", choose Always Allow...")
+    print("Importing from Arc. If macOS asks about \"Arc Safe Storage\", choose Always Allow...", flush=True)
     started = time.time()
+    # Leave plenty of time to answer the keychain prompt.
     report = client.execute_async(
         script,
         [str(ARC_ROOT), {"spaces": not opts.no_spaces, "extensions": opts.extensions}],
+        timeout_ms=3 * 60 * 60 * 1000,
     )
     print(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"Done in {time.time() - started:.0f}s")
