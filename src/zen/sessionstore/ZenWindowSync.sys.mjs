@@ -1329,33 +1329,92 @@ class nsZenWindowSync {
   }
 
   /**
-   * Moves all tabs from a window to a synced workspace in another window.
+   * Moves tabs from a window to a synced workspace in another window.
    * If no synced window exists, creates a new one.
+   *
+   * This runs here rather than in the window the tabs come from, since that
+   * window may be closed before the move is done.
    *
    * @param {Window} aWindow - The window to move tabs from.
    * @param {string} aWorkspaceId - The ID of the workspace to move tabs to.
+   * @param {object} [options]
+   * @param {MozTabbrowserTab[]} [options.tabs] - The tabs to move, all of
+   *   the window's by default.
+   * @param {Window} [options.targetWindow] - The synced window to move them
+   *   to, the first one by default.
+   * @param {boolean} [options.closeWindow] - Whether to close aWindow once
+   *   its tabs are moved.
    */
-  moveTabsToSyncedWorkspace(aWindow, aWorkspaceId) {
-    const tabsToMove = aWindow.gZenWorkspaces.allStoredTabs.filter(
-      tab => !tab.hasAttribute("zen-empty-tab")
+  moveTabsToSyncedWorkspace(
+    aWindow,
+    aWorkspaceId,
+    { tabs = null, targetWindow = null, closeWindow = true } = {}
+  ) {
+    const tabsToMove = (tabs ?? aWindow.gZenWorkspaces.allStoredTabs).filter(
+      tab => !tab.hasAttribute("zen-empty-tab") && !tab.closing
     );
-    const selectedTab = aWindow.gBrowser.selectedTab;
-    let win = this.firstSyncedWindow;
-    const moveAllTabsToWindow = async (allowSelected = false) => {
+    // Read before anything moves: a moved tab is no longer selected here.
+    const selectedTab = tabsToMove.includes(aWindow.gBrowser.selectedTab)
+      ? aWindow.gBrowser.selectedTab
+      : tabsToMove[0];
+    if (!selectedTab) {
+      return;
+    }
+    let win = targetWindow ?? this.firstSyncedWindow;
+    const moveAllTabsToWindow = async (aMovedTab = null) => {
       const { gBrowser, gZenWorkspaces } = win;
       win.focus();
-      let tabToSelect;
+      const space = gZenWorkspaces.getWorkspaceFromId(aWorkspaceId);
+      const userContextId =
+        typeof space?.containerTabId === "number" ? space.containerTabId : 0;
+      let tabToSelect = null;
+      const placeTab = (aTab, aWasSelected) => {
+        gZenWorkspaces.moveTabToWorkspace(aTab, aWorkspaceId);
+        if (!tabToSelect || aWasSelected) {
+          tabToSelect = aTab;
+        }
+      };
+      if (aMovedTab) {
+        placeTab(aMovedTab, true);
+      }
       for (const tab of tabsToMove) {
-        if (tab !== selectedTab || allowSelected) {
-          const newTab = gBrowser.adoptTab(tab, { tabIndex: Infinity });
-          gZenWorkspaces.moveTabToWorkspace(newTab, aWorkspaceId);
-          if (!tabToSelect) {
-            tabToSelect = newTab;
-          }
+        // The tab a new window was made from is already in it.
+        if (
+          tab.closing ||
+          !tab.isConnected ||
+          (aMovedTab && tab === selectedTab)
+        ) {
+          continue;
+        }
+        const wasSelected = tab === selectedTab;
+        if ((tab.userContextId ?? 0) === userContextId) {
+          placeTab(gBrowser.adoptTab(tab, { tabIndex: Infinity }), wasSelected);
+          continue;
+        }
+        // A page can't change containers: load it again in the space's one.
+        const url = tab.linkedBrowser.currentURI?.spec;
+        if (url && url !== "about:blank") {
+          placeTab(
+            gBrowser.addTrustedTab(url, {
+              userContextId,
+              inBackground: true,
+              skipAnimation: true,
+            }),
+            wasSelected
+          );
+        }
+        if (!closeWindow) {
+          aWindow.gBrowser.removeTab(tab, {
+            animate: false,
+            closeWindowWithLastTab: false,
+          });
         }
       }
-      aWindow.close();
+      if (closeWindow) {
+        aWindow.close();
+      }
       if (tabToSelect) {
+        gZenWorkspaces.lastSelectedWorkspaceTabs[aWorkspaceId] = tabToSelect;
         gBrowser.selectedTab = tabToSelect;
       }
       await gZenWorkspaces.changeWorkspaceWithID(aWorkspaceId);
@@ -1368,18 +1427,21 @@ class nsZenWindowSync {
         {},
         /* zenForceSync = */ true
       );
+      if (!win) {
+        return;
+      }
       win.addEventListener(
         "MozBeforeInitialXULLayout",
         () => {
           win.gZenStartup.promiseInitialized.then(() => {
-            moveAllTabsToWindow();
+            moveAllTabsToWindow(win.gBrowser.selectedTab);
           });
         },
         { once: true }
       );
       return;
     }
-    moveAllTabsToWindow(true);
+    moveAllTabsToWindow();
   }
 
   /**

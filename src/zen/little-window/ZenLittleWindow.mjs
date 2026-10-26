@@ -77,19 +77,23 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
    *   address bar opens so a page can be picked.
    * @param {string} [options.spaceId] - The space "Open in" sends the page
    *   to. Defaults to the space last used in a regular window.
+   * @param {nsIPrincipal} [options.triggeringPrincipal] - What loads the
+   *   page, the system by default.
    * @returns {Window|null} The new window.
    */
-  open({ url = null, spaceId = null } = {}) {
+  open({ url = null, spaceId = null, triggeringPrincipal = null } = {}) {
     if (!this.enabled || PrivateBrowsingUtils.isWindowPrivate(window)) {
       return null;
     }
     const space = this.#resolveSpace(spaceId);
     const { left, top, width, height } = this.#initialBounds();
 
+    // The page is loaded once the window is up: a single URL argument would
+    // be split on "|" and loaded as several pages.
     const args = Cc["@mozilla.org/supports-string;1"].createInstance(
       Ci.nsISupportsString
     );
-    args.data = url || "about:blank";
+    args.data = "about:blank";
     const win = OpenBrowserWindow({
       args,
       features: `width=${width},height=${height},left=${left},top=${top}`,
@@ -99,7 +103,11 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     // window is never synced.
     win._zenStartupSyncFlag = "unsynced";
     win._zenStartupUnsyncedUserContextId = this.#spaceContainerId(space);
-    win._zenLittleWindow = { spaceId: space?.uuid ?? null, hasURL: !!url };
+    win._zenLittleWindow = {
+      spaceId: space?.uuid ?? null,
+      url,
+      triggeringPrincipal,
+    };
     return win;
   }
 
@@ -156,8 +164,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     if (window.windowState !== window.STATE_NORMAL) {
       return;
     }
-    Services.prefs.setIntPref("zen.little-window.width", window.outerWidth);
-    Services.prefs.setIntPref("zen.little-window.height", window.outerHeight);
+    // The width and height a window is opened with are its inner size.
+    Services.prefs.setIntPref("zen.little-window.width", window.innerWidth);
+    Services.prefs.setIntPref("zen.little-window.height", window.innerHeight);
     Services.prefs.setStringPref(
       "zen.little-window.position",
       `${window.screenX},${window.screenY}`
@@ -294,7 +303,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
 
   #updateToolbar() {
     const space = this.targetSpace;
-    const icon = space ? gZenWorkspaces.getWorkspaceIcon(space) : "";
+    const icon = (space && gZenWorkspaces.getWorkspaceIcon(space)) || "";
     for (const element of document.querySelectorAll(
       ".zen-little-window-space-name"
     )) {
@@ -317,15 +326,33 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   }
 
   #addKeys() {
+    // Only describes the shortcut for the toolbar: Accel+O is also "Open
+    // File" in the main keyset, which would get it first, so the keypress
+    // itself is caught earlier, in #onKeyDown.
     const keyset = window.MozXULElement.parseXULToFragment(`
       <keyset id="zen-little-window-keyset">
         <key id="zen-little-window-open-in-key" key="O" modifiers="accel"/>
       </keyset>
     `);
-    keyset
-      .querySelector("key")
-      .addEventListener("command", () => this.openInSpace());
     document.documentElement.appendChild(keyset);
+    window.addEventListener("keydown", this, true);
+  }
+
+  #onKeyDown(event) {
+    const accel =
+      AppConstants.platform === "macosx" ? event.metaKey : event.ctrlKey;
+    const otherModifiers =
+      event.altKey ||
+      event.shiftKey ||
+      (AppConstants.platform === "macosx" ? event.ctrlKey : event.metaKey);
+    if (!accel || otherModifiers || event.key.toLowerCase() !== "o") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) {
+      this.openInSpace();
+    }
   }
 
   // Section: window behaviour
@@ -334,7 +361,14 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     this.#initialTab = gBrowser.selectedTab;
     // Spaces are only known once the window has fully started.
     this.#updateToolbar();
-    if (!window._zenLittleWindow.hasURL) {
+    const { url, triggeringPrincipal } = window._zenLittleWindow;
+    if (url) {
+      gBrowser.selectedBrowser.fixupAndLoadURIString(url, {
+        triggeringPrincipal:
+          triggeringPrincipal ??
+          Services.scriptSecurityManager.getSystemPrincipal(),
+      });
+    } else {
       // Ask where to go straight away, the same way Arc does. The page takes
       // focus once the window gets activated and once it finishes loading, so
       // ask again then, as long as nothing was picked yet.
@@ -380,6 +414,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       case "resize":
         clearTimeout(this.#saveBoundsTimer);
         this.#saveBoundsTimer = setTimeout(() => this.#saveBounds(), 500);
+        break;
+      case "keydown":
+        this.#onKeyDown(event);
         break;
     }
   }
@@ -461,56 +498,12 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
    * @param {boolean} options.closeWindow - Close this window afterwards.
    */
   #sendTabs(aTabs, aSpace, { closeWindow }) {
-    const target = this.#syncedWindow;
-    if (!target) {
-      // No regular window to send it to: this window becomes a regular
-      // one in that space.
-      lazy.ZenWindowSync.moveTabsToSyncedWorkspace(window, aSpace.uuid);
-      return;
-    }
-    const { gBrowser: targetBrowser, gZenWorkspaces: targetSpaces } = target;
-    const userContextId = this.#spaceContainerId(aSpace);
-    let tabToSelect = null;
-    for (const tab of aTabs) {
-      let newTab;
-      if ((tab.userContextId ?? 0) === userContextId) {
-        // Keep the page as it is, scroll position, form data and all.
-        newTab = targetBrowser.adoptTab(tab, {
-          tabIndex: Infinity,
-          selectTab: false,
-        });
-      } else {
-        // The space has another container: the page can't be moved over and
-        // has to be loaded again there.
-        const url = tab.linkedBrowser.currentURI?.spec;
-        if (!url || url === "about:blank") {
-          continue;
-        }
-        newTab = targetBrowser.addTrustedTab(url, {
-          userContextId,
-          inBackground: true,
-          skipAnimation: true,
-        });
-      }
-      if (!newTab) {
-        continue;
-      }
-      targetSpaces.moveTabToWorkspace(newTab, aSpace.uuid);
-      if (!tabToSelect || tab.selected) {
-        tabToSelect = newTab;
-      }
-    }
-    if (closeWindow) {
-      window.close();
-    }
-    if (!tabToSelect) {
-      return;
-    }
-    targetSpaces.lastSelectedWorkspaceTabs[aSpace.uuid] = tabToSelect;
-    targetSpaces.changeWorkspaceWithID(aSpace.uuid).then(() => {
-      targetBrowser.selectedTab = tabToSelect;
-      target.focus();
-      targetBrowser.selectedBrowser.focus();
+    // Done by window sync, which outlives this window: what is left once the
+    // window closes, like focusing the page in its space, still happens.
+    lazy.ZenWindowSync.moveTabsToSyncedWorkspace(window, aSpace.uuid, {
+      tabs: aTabs,
+      targetWindow: this.#syncedWindow,
+      closeWindow,
     });
   }
 }

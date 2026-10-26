@@ -386,7 +386,8 @@ async function importProfileData(migrator, profile) {
   // Spaces, each in its profile's container.
   if (options.spaces && !progress.spaces) {
     for (const space of plan.spaces) {
-      space.userContextId = containerFor.get(space.profile ?? mainProfile) ?? 0;
+      // Spaces without a profile of their own use Arc's default one.
+      space.userContextId = containerFor.get(space.profile ?? "Default") ?? 0;
     }
     try {
       report.spaces = await ZenMigrationUtils.applyArcSidebar(plan);

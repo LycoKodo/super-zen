@@ -1339,14 +1339,19 @@ class nsZenKeyboardShortcutsVersioner {
 
     if (version < 22) {
       // Migrate from version 21 to 22.
-      // Add shortcut to open a little window, as Arc does: Default Accel+Alt+N
+      // Add shortcut to open a little window, as Arc does: Default Cmd+Opt+N
+      // on macOS. Elsewhere Ctrl+Alt is AltGr on many keyboard layouts, so it
+      // is left unbound there.
+      const isMac = AppConstants.platform == "macosx";
       data.push(
         new KeyShortcut(
           "zen-little-window",
-          "N",
+          isMac ? "N" : "",
           "",
           ZEN_OTHER_SHORTCUTS_GROUP,
-          nsKeyShortcutModifiers.fromObject({ accel: true, alt: true }),
+          nsKeyShortcutModifiers.fromObject(
+            isMac ? { accel: true, alt: true } : {}
+          ),
           "cmd_zenOpenLittleWindow",
           "zen-little-window-shortcut"
         )
