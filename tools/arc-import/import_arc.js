@@ -21,13 +21,13 @@ const [arcRoot, options] = arguments;
 const done = arguments[arguments.length - 1];
 
 const { MigrationUtils } = ChromeUtils.importESModule(
-  "resource:///modules/MigrationUtils.sys.mjs"
+  "moz-src:///browser/components/migration/MigrationUtils.sys.mjs"
 );
 const { ZenMigrationUtils } = ChromeUtils.importESModule(
   "resource:///modules/zen/ZenMigrationUtils.sys.mjs"
 );
 const { ContextualIdentityService } = ChromeUtils.importESModule(
-  "resource://gre/modules/ContextualIdentityService.sys.mjs"
+  "moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs"
 );
 const { Sqlite } = ChromeUtils.importESModule(
   "resource://gre/modules/Sqlite.sys.mjs"

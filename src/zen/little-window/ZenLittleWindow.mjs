@@ -24,6 +24,8 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   // The space the page is sent to by "Open in".
   #targetSpaceId = null;
   #initialTab = null;
+  // Set while the page is reopened in another container.
+  #replacingTab = false;
 
   constructor() {
     super();
@@ -52,7 +54,8 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     this.#targetSpaceId = window._zenLittleWindow.spaceId;
     this.#addKeys();
     this.#buildToolbar();
-    gBrowser.tabContainer.addEventListener("TabOpen", this);
+    // gBrowser isn't set up yet, the window sees its tabs open all the same.
+    window.addEventListener("TabOpen", this);
     gZenStartup.promiseInitialized.then(() => this.#onStartupDone());
   }
 
@@ -113,7 +116,11 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   }
 
   get #spaces() {
-    return gZenWorkspaces.getWorkspaces(true);
+    // A regular window knows about spaces the session store hasn't saved yet.
+    return (
+      this.#syncedWindow?.gZenWorkspaces.getWorkspaces() ??
+      gZenWorkspaces.getWorkspaces(true)
+    );
   }
 
   #resolveSpace(spaceId) {
@@ -260,10 +267,21 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
 
   #onStartupDone() {
     this.#initialTab = gBrowser.selectedTab;
+    // Spaces are only known once the window has fully started.
+    this.#updateToolbar();
     if (!window._zenLittleWindow.hasURL) {
-      // Ask where to go straight away, the same way Arc does.
-      gURLBar.focus();
-      gURLBar.select();
+      // Ask where to go straight away, the same way Arc does. The page takes
+      // focus when the window gets activated, so ask again then if needed.
+      const openLocation = () =>
+        setTimeout(() => {
+          if (!gURLBar.focused) {
+            document.getElementById("Browser:OpenLocation").doCommand();
+          }
+        }, 0);
+      openLocation();
+      if (Services.focus.activeWindow !== window) {
+        window.addEventListener("activate", openLocation, { once: true });
+      }
     }
   }
 
@@ -282,6 +300,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   #onTabOpen(aTab) {
     if (
       !this.#initialTab ||
+      this.#replacingTab ||
       aTab === this.#initialTab ||
       aTab.hasAttribute("zen-empty-tab") ||
       aTab.hasAttribute("zen-glance-tab")
@@ -312,10 +331,16 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     }
     const oldTab = gBrowser.selectedTab;
     const uri = oldTab.linkedBrowser.currentURI;
-    const newTab = gBrowser.addTrustedTab(
-      uri && uri.spec !== "about:blank" ? uri.spec : "about:blank",
-      { userContextId, inBackground: false, skipAnimation: true }
-    );
+    let newTab;
+    this.#replacingTab = true;
+    try {
+      newTab = gBrowser.addTrustedTab(
+        uri && uri.spec !== "about:blank" ? uri.spec : "about:blank",
+        { userContextId, inBackground: false, skipAnimation: true }
+      );
+    } finally {
+      this.#replacingTab = false;
+    }
     this.#initialTab = newTab;
     gBrowser.selectedTab = newTab;
     gBrowser.removeTab(oldTab, { animate: false, closeWindowWithLastTab: false });

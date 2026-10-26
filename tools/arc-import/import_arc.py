@@ -14,6 +14,7 @@ the keychain: choose "Always Allow".
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -32,7 +33,9 @@ def launch(app, profile=None):
     args = [str(binary), "--marionette", "--remote-allow-system-access", "-no-remote"]
     if profile:
         args += ["-profile", profile]
-    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Chrome-privileged scripts need system access.
+    env = dict(os.environ, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS="1")
+    return subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def connect():

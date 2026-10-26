@@ -371,7 +371,11 @@ export class nsZenUrlbarController {
     if (gURLBar.hasAttribute("breakout-extend")) {
       return aURL;
     }
-    if (gZenVerticalTabsManager._hasSetSingleToolbar && this.showDomainOnly) {
+    if (
+      (gZenVerticalTabsManager._hasSetSingleToolbar ||
+        document.documentElement.hasAttribute("zen-little-window")) &&
+      this.showDomainOnly
+    ) {
       let url = BrowserUIUtils.removeSingleTrailingSlashFromURL(aURL);
       let stripped = url.startsWith("https://") ? url.split("/")[2] : url;
       if (stripped.startsWith("www.")) {
