@@ -271,10 +271,14 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     this.#updateToolbar();
     if (!window._zenLittleWindow.hasURL) {
       // Ask where to go straight away, the same way Arc does. The page takes
-      // focus when the window gets activated, so ask again then if needed.
+      // focus once the window gets activated and once it finishes loading, so
+      // ask again then, as long as nothing was picked yet.
       const openLocation = () =>
         setTimeout(() => {
-          if (!gURLBar.focused) {
+          if (
+            !gURLBar.focused &&
+            gBrowser.selectedBrowser.currentURI.spec === "about:blank"
+          ) {
             document.getElementById("Browser:OpenLocation").doCommand();
           }
         }, 0);
@@ -282,6 +286,22 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       if (Services.focus.activeWindow !== window) {
         window.addEventListener("activate", openLocation, { once: true });
       }
+      const listener = {
+        onStateChange(webProgress, request, flags) {
+          if (
+            webProgress.isTopLevel &&
+            flags & Ci.nsIWebProgressListener.STATE_STOP
+          ) {
+            gBrowser.removeProgressListener(listener);
+            openLocation();
+          }
+        },
+        QueryInterface: ChromeUtils.generateQI([
+          "nsIWebProgressListener",
+          "nsISupportsWeakReference",
+        ]),
+      };
+      gBrowser.addProgressListener(listener);
     }
   }
 
