@@ -383,12 +383,18 @@ export class nsZenSessionManager {
       "zen.session-store.restore-unsynced-windows",
       true
     );
-    if (initialState?.windows?.length && !allowRestoreUnsynced) {
+    if (initialState?.windows?.length) {
       initialState.windows = initialState.windows.filter(win => {
-        if (win.isZenUnsynced) {
-          this.log("Skipping unsynced window during restore");
+        // Little windows are only ever meant for a quick look.
+        if (win.isZenLittleWindow) {
+          this.log("Skipping little window during restore");
+          return false;
         }
-        return !win.isZenUnsynced;
+        if (win.isZenUnsynced && !allowRestoreUnsynced) {
+          this.log("Skipping unsynced window during restore");
+          return false;
+        }
+        return true;
       });
     }
     // If there are no windows, we create an empty one. By default,

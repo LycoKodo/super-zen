@@ -51,6 +51,7 @@ const defaultKeyboardGroups = {
   windowAndTabManagement: [
     "zen-window-new-shortcut",
     "zen-new-unsynced-window-shortcut",
+    "zen-little-window-shortcut",
     "zen-tab-new-shortcut",
     "zen-key-enter-full-screen",
     "zen-key-exit-full-screen",
@@ -894,7 +895,7 @@ class nsZenKeyboardShortcutsLoader {
 }
 
 class nsZenKeyboardShortcutsVersioner {
-  static LATEST_KBS_VERSION = 21;
+  static LATEST_KBS_VERSION = 22;
 
   constructor() {}
 
@@ -1332,6 +1333,22 @@ class nsZenKeyboardShortcutsVersioner {
           nsKeyShortcutModifiers.fromObject({ alt: true, shift: true }),
           "cmd_zenToggleLibrary",
           "zen-library-shortcut-toggle"
+        )
+      );
+    }
+
+    if (version < 22) {
+      // Migrate from version 21 to 22.
+      // Add shortcut to open a little window, as Arc does: Default Accel+Alt+N
+      data.push(
+        new KeyShortcut(
+          "zen-little-window",
+          "N",
+          "",
+          ZEN_OTHER_SHORTCUTS_GROUP,
+          nsKeyShortcutModifiers.fromObject({ accel: true, alt: true }),
+          "cmd_zenOpenLittleWindow",
+          "zen-little-window-shortcut"
         )
       );
     }

@@ -123,6 +123,7 @@
     cmd_zenOpenZenThemePicker: event => gZenThemePicker.openThemePicker(event),
     cmd_zenNewNavigatorUnsynced: () =>
       OpenBrowserWindow({ zenSyncedWindow: false }),
+    cmd_zenOpenLittleWindow: () => gZenLittleWindow.open(),
     cmd_zenToggleLibrary: () => lazy.ZenLibrary.toggle(),
   };
 

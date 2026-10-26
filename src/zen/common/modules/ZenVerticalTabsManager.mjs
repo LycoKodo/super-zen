@@ -24,7 +24,10 @@ window.gZenVerticalTabsManager = {
     });
 
     ChromeUtils.defineLazyGetter(this, "hidesTabsToolbar", () => {
-      return document.documentElement.hasAttribute("popup-window");
+      return (
+        document.documentElement.hasAttribute("popup-window") ||
+        document.documentElement.hasAttribute("zen-little-window")
+      );
     });
 
     this.initializePreferences(this._onPrefChange.bind(this));
@@ -622,6 +625,12 @@ window.gZenVerticalTabsManager = {
 
       if (shouldHide) {
         appContentNavbarContaienr.append(windowButtons);
+      }
+
+      if (this.hidesTabsToolbar && !this.isWindowsStyledButtons) {
+        // Without a sidebar, the window controls go at the start of the
+        // only toolbar there is.
+        navBar.prepend(windowButtons);
       }
 
       if (

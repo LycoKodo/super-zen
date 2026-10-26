@@ -122,13 +122,27 @@ export class nsZenMenuBar {
     PanelMultiView.getViewNode(document, "appMenu-new-window-button2").after(
       openUnsyncedWindowItem
     );
+    openUnsyncedWindowItem.after(
+      window.MozXULElement.parseXULToFragment(
+        `<toolbarbutton id="appMenu-new-zen-little-window-button"
+                  class="subviewbutton"
+                  data-l10n-id="zen-appmenu-new-little-window"
+                  key="zen-little-window"
+                  command="cmd_zenOpenLittleWindow"/>`
+      )
+    );
     document.getElementById("menu_newNavigator").after(
       window.MozXULElement.parseXULToFragment(`
         <menuitem id="menu_new_zen_unsynced_window"
                 class="subviewbutton"
                 data-l10n-id="zen-menubar-new-blank-window"
                 key="zen-new-unsynced-window"
-                command="cmd_zenNewNavigatorUnsynced"/>`)
+                command="cmd_zenNewNavigatorUnsynced"/>
+        <menuitem id="menu_new_zen_little_window"
+                class="subviewbutton"
+                data-l10n-id="zen-menubar-new-little-window"
+                key="zen-little-window"
+                command="cmd_zenOpenLittleWindow"/>`)
     );
   }
 

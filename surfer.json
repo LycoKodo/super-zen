@@ -45,6 +45,18 @@
           "repo": "zen-browser/desktop"
         }
       }
+    },
+    "superzen": {
+      "backgroundColor": "#282A33",
+      "brandShorterName": "Super Zen",
+      "brandShortName": "Super Zen",
+      "brandFullName": "Super Zen",
+      "release": {
+        "displayVersion": "1.23.4b",
+        "github": {
+          "repo": "LycoKodo/super-zen"
+        }
+      }
     }
   },
   "license": {

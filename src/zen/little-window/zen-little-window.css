@@ -1,0 +1,164 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
+/* Little windows: a single slim toolbar above the page, no sidebar. */
+
+:root:not([zen-little-window]) :is(#zen-little-window-space-item, #zen-little-window-actions) {
+  display: none;
+}
+
+:root[zen-little-window] {
+  --zen-little-window-toolbar-height: 40px;
+
+  & #navigator-toolbox,
+  & #zen-sidebar-splitter {
+    visibility: collapse;
+  }
+
+  & #zen-appcontent-navbar-wrapper {
+    min-height: var(--zen-little-window-toolbar-height);
+    visibility: visible;
+    opacity: 1;
+  }
+
+  & #nav-bar {
+    min-height: var(--zen-little-window-toolbar-height);
+    -moz-window-dragging: drag;
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  /* Only the address, the space and our own buttons. */
+  & #nav-bar-customization-target > :not(#urlbar-container, #unified-extensions-button),
+  & #nav-bar :is(#PanelUI-button, #nav-bar-overflow-button, #zen-sidebar-top-buttons) {
+    display: none !important;
+  }
+
+  & #nav-bar-customization-target {
+    flex: 1;
+    justify-content: center;
+  }
+
+  & #urlbar-container {
+    flex: 1;
+    max-width: 640px;
+    margin-inline: auto;
+  }
+
+  /* The address reads as a centered domain until it is edited. */
+  & #urlbar:not([breakout-extend]) {
+    background: transparent;
+    box-shadow: none;
+
+    & .urlbar-input {
+      text-align: center;
+    }
+  }
+
+  & #tabbrowser-tabbox {
+    margin-top: 0 !important;
+  }
+}
+
+.zen-little-window-pill,
+#zen-little-window-open-in > button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding-inline: 10px;
+  border: none;
+  border-radius: 8px;
+  font: menu;
+  font-weight: 500;
+  color: inherit;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  -moz-window-dragging: no-drag;
+
+  &:hover {
+    background: color-mix(in srgb, currentColor 16%, transparent);
+  }
+
+  &:hover:active,
+  &[open] {
+    background: color-mix(in srgb, currentColor 22%, transparent);
+  }
+}
+
+.zen-little-window-space-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  -moz-context-properties: fill, fill-opacity;
+  fill: currentColor;
+}
+
+#zen-little-window-actions {
+  gap: 4px;
+  align-items: center;
+}
+
+#zen-little-window-copy-url {
+  list-style-image: url("chrome://global/skin/icons/link.svg");
+  -moz-window-dragging: no-drag;
+}
+
+#zen-little-window-open-in {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: 8px;
+  background: var(--toolbar-field-background-color, light-dark(white, #2b2a33));
+  box-shadow: 0 1px 3px color-mix(in srgb, black 18%, transparent);
+  -moz-window-dragging: no-drag;
+
+  & > button {
+    background: transparent;
+    border-radius: 0;
+  }
+
+  & > button:first-child {
+    border-start-start-radius: 8px;
+    border-end-start-radius: 8px;
+    padding-inline-end: 8px;
+  }
+
+  & .zen-little-window-space-name {
+    color: var(--zen-primary-color, AccentColor);
+    font-weight: 600;
+  }
+
+  & kbd {
+    font: menu;
+    font-size: 0.85em;
+    opacity: 0.6;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+}
+
+#zen-little-window-open-in-menu {
+  border-start-end-radius: 8px;
+  border-end-end-radius: 8px;
+  padding-inline: 6px;
+  border-inline-start: 1px solid color-mix(in srgb, currentColor 12%, transparent) !important;
+
+  &::after {
+    content: "";
+    width: 12px;
+    height: 12px;
+    background: url("chrome://global/skin/icons/arrow-down.svg") center / contain no-repeat;
+    -moz-context-properties: fill;
+    fill: currentColor;
+  }
+}

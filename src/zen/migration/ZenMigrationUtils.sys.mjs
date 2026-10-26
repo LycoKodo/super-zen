@@ -97,6 +97,16 @@ function arcSpaceIcon(space) {
 }
 
 /**
+ * @param {object} space An Arc space.
+ * @returns {string|null} The directory of the Arc profile the space uses, or
+ *   null for the default profile.
+ */
+function arcSpaceProfile(space) {
+  const directory = space.profile?.custom?._0?.directoryBasename;
+  return typeof directory === "string" && directory ? directory : null;
+}
+
+/**
  * @param {object} color An Arc color.
  * @returns {number[]|null} 8-bit `[r, g, b]`, or null for a missing or fully
  *   transparent color.
@@ -239,7 +249,9 @@ class ZenMigrationUtilsClass {
    * @param {object} sidebar The parsed JSON file.
    * @returns {{favorites: object[], spaces: object[]}}
    *   `favorites` holds Arc's top apps (Zen essentials) and each space its
-   *   title, optional emoji icon, theme colors and pinned items tree.
+   *   title, optional emoji icon, theme colors, Arc profile and pinned items
+   *   tree. A space given a `userContextId` before being applied gets that
+   *   container, and so do its pinned tabs.
    */
   parseArcSidebar(sidebar) {
     const plan = { favorites: [], spaces: [] };
@@ -321,6 +333,9 @@ class ZenMigrationUtilsClass {
           title: arcSpaceTitle(space, plan.spaces.length),
           icon: arcSpaceIcon(space),
           theme: arcSpaceTheme(space),
+          // The Arc profile directory ("Profile 2") of spaces that don't use
+          // the default profile.
+          profile: arcSpaceProfile(space),
           items: typeof pinnedId === "string" ? convert(pinnedId, 0) : [],
         });
       }
@@ -354,7 +369,9 @@ class ZenMigrationUtilsClass {
           this.#pinTabInto(win, tab, uuid, null);
         }
       }
-      this.#applyItems(win, space.items, uuid, null, 0, null);
+      this.#applyItems(win, space.items, uuid, null, 0, null, {
+        userContextId: space.userContextId ?? 0,
+      });
       count++;
     }
     for (const tab of leftovers.splice(0)) {
@@ -484,6 +501,9 @@ class ZenMigrationUtilsClass {
         );
       if (active && !hasPins) {
         active.name = space.title;
+        if (space.userContextId) {
+          active.containerTabId = space.userContextId;
+        }
         if (space.icon) {
           active.icon = space.icon;
         }
@@ -501,7 +521,8 @@ class ZenMigrationUtilsClass {
     const data = await gZenWorkspaces.createAndSaveWorkspace(
       space.title,
       space.icon,
-      /* dontChange */ true
+      /* dontChange */ true,
+      space.userContextId ?? 0
     );
     if (!data) {
       throw new Error("ZenMigrationUtils: spaces are disabled in this window");
@@ -520,7 +541,15 @@ class ZenMigrationUtilsClass {
   // Walks a plan, creating pinned tabs and folders in order. Folders deeper
   // than Zen allows are flattened into their parent. `budget` is an optional
   // `{ remaining }` counter decremented per pinned tab.
-  #applyItems(win, items, workspaceId, parentFolder, depth, budget) {
+  #applyItems(
+    win,
+    items,
+    workspaceId,
+    parentFolder,
+    depth,
+    budget,
+    { userContextId = 0 } = {}
+  ) {
     for (const item of items) {
       if (budget && budget.remaining <= 0) {
         return;
@@ -529,7 +558,7 @@ class ZenMigrationUtilsClass {
         if (budget) {
           budget.remaining--;
         }
-        const tab = this.#createLazyTab(win, item);
+        const tab = this.#createLazyTab(win, item, userContextId);
         this.#pinTabInto(win, tab, workspaceId, parentFolder);
       } else if (item.type === "folder") {
         if (depth >= lazy.gMaxSubfolders) {
@@ -539,7 +568,8 @@ class ZenMigrationUtilsClass {
             workspaceId,
             parentFolder,
             depth,
-            budget
+            budget,
+            { userContextId }
           );
           continue;
         }
@@ -555,7 +585,8 @@ class ZenMigrationUtilsClass {
           workspaceId,
           folder,
           depth + 1,
-          budget
+          budget,
+          { userContextId }
         );
         folder.collapsed = true;
       }
@@ -564,8 +595,9 @@ class ZenMigrationUtilsClass {
 
   // Opens an unloaded tab that already knows its pinned url and title, so it
   // shows up right away without loading anything.
-  #createLazyTab(win, item) {
+  #createLazyTab(win, item, userContextId = 0) {
     const tab = win.gBrowser.addTrustedTab(item.url, {
+      userContextId,
       createLazyBrowser: true,
       inBackground: true,
       skipAnimation: true,

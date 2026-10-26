@@ -29,6 +29,7 @@
     "chrome://browser/content/zen-components/ZenEmojiPicker.mjs",
     "chrome://browser/content/zen-components/ZenDownloadAnimation.mjs",
     "resource:///modules/zen/share/ZenShareManager.mjs",
+    "chrome://browser/content/zen-components/ZenLittleWindow.mjs",
   ];
 
   for (let script of scripts) {
