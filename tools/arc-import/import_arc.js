@@ -8,8 +8,9 @@
  *
  *  - Every Arc profile becomes a container, except the one of the first
  *    space, which uses the default container.
- *  - History, passwords, form data, payment cards and extensions of every
- *    profile go through Zen's own Arc migrator.
+ *  - History, passwords, form data and payment cards of every profile go
+ *    through Zen's own Arc migrator. Extensions aren't imported: Firefox
+ *    only matches Chrome's own, so install their Firefox versions by hand.
  *  - Cookies, which no migrator imports, are decrypted with Arc's keychain
  *    key and added to the profile's container, so accounts stay signed in.
  *  - Spaces, pinned tabs, folders and favorites are created from Arc's
@@ -280,9 +281,6 @@ async function importProfileData(migrator, profile) {
     types.FORMDATA |
     types.BOOKMARKS |
     types.PAYMENT_METHODS;
-  if (options.extensions) {
-    items |= types.EXTENSIONS;
-  }
   const available = await migrator.getMigrateData(profile);
   items &= available;
   if (!items) {
@@ -306,10 +304,6 @@ async function importProfileData(migrator, profile) {
   // A full import: all of history, not only recent pages.
   Services.prefs.setIntPref("browser.migrate.chrome.history.limit", 0);
   Services.prefs.setIntPref("browser.migrate.history.maxAgeInDays", 36500);
-  Services.prefs.setBoolPref(
-    "browser.migrate.chrome.extensions.enabled",
-    !!options.extensions
-  );
   Services.prefs.setBoolPref(
     "browser.migrate.chrome.payment_methods.enabled",
     true
@@ -343,7 +337,7 @@ async function importProfileData(migrator, profile) {
     report.containers[profile.name] = id;
   }
 
-  // History, passwords, form data and extensions.
+  // History, passwords, form data and payment cards.
   const migrator = await MigrationUtils.getMigrator("arc");
   const sourceProfiles = (await migrator.getSourceProfiles()) ?? [];
   for (const profile of profiles) {

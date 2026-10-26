@@ -57,7 +57,6 @@ def main():
     parser.add_argument("--app", default="/Applications/Super Zen.app")
     parser.add_argument("--profile", help="Profile directory (defaults to the app's default profile)")
     parser.add_argument("--no-spaces", action="store_true", help="Skip importing Arc's sidebar")
-    parser.add_argument("--extensions", action="store_true", help="Also install Firefox versions of Arc extensions")
     opts = parser.parse_args()
 
     if not (ARC_ROOT / "User Data").exists():
@@ -86,7 +85,7 @@ def main():
     # Leave plenty of time to answer the keychain prompt.
     report = client.execute_async(
         script,
-        [str(ARC_ROOT), {"spaces": not opts.no_spaces, "extensions": opts.extensions}],
+        [str(ARC_ROOT), {"spaces": not opts.no_spaces}],
         timeout_ms=3 * 60 * 60 * 1000,
     )
     print(json.dumps(report, indent=2, ensure_ascii=False))
