@@ -26,6 +26,8 @@ class nsZenLittleWindows {
   #previousApps = new WeakMap();
   // Windows that are up but not shown yet, see #showSmoothly.
   #unrevealed = new WeakSet();
+  // Windows sliding into place, which aren't where they will stay yet.
+  #sliding = new WeakSet();
   #hotKey = null;
 
   constructor() {
@@ -165,7 +167,10 @@ class nsZenLittleWindows {
    * @param {Window} aWindow
    */
   saveBounds(aWindow) {
-    if (aWindow.windowState !== aWindow.STATE_NORMAL) {
+    if (
+      aWindow.windowState !== aWindow.STATE_NORMAL ||
+      this.#sliding.has(aWindow)
+    ) {
       return;
     }
     // The width and height a window is opened with are its inner size.
@@ -401,7 +406,11 @@ class nsZenLittleWindows {
   /**
    * Shows a window put up by #showSmoothly the way Hyprland shows a dropdown
    * terminal: it slides down into place from above the top of its screen,
-   * out from under the menu bar, and overshoots a little as it lands.
+   * out from under the menu bar, and bounces a little as it lands.
+   *
+   * AppKit clamps a timing curve that overshoots, so the bounce is a second
+   * step: the window slides a little past its place, coming to rest there,
+   * and settles back from rest, which hides where one step meets the next.
    *
    * @param {Window} aWindow
    */
@@ -414,6 +423,7 @@ class nsZenLittleWindows {
     try {
       nativeWindow = Cocoa.nativeWindow(aWindow);
       const frame = Cocoa.frame(nativeWindow);
+      this.#sliding.add(aWindow);
       Cocoa.setUnconstrained(nativeWindow, true);
       Cocoa.setFrame(nativeWindow, {
         ...frame,
@@ -422,20 +432,33 @@ class nsZenLittleWindows {
       Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 1);
       Cocoa.animate(nativeWindow, {
         duration: SLIDE_IN_DURATION,
-        curve: OVERSHOOT_CURVE,
-        frame,
+        curve: EASE_OUT_CURVE,
+        // AppKit's y grows upwards.
+        frame: { ...frame, y: frame.y - BOUNCE },
       });
       const target = nativeWindow;
-      lazy.setTimeout(
-        () => {
-          if (!aWindow.closed) {
-            Cocoa.setUnconstrained(target, false);
-          }
-        },
-        SLIDE_IN_DURATION * 1000 + 50
-      );
+      lazy.setTimeout(() => {
+        if (aWindow.closed) {
+          return;
+        }
+        Cocoa.animate(target, {
+          duration: SETTLE_DURATION,
+          curve: EASE_IN_OUT_CURVE,
+          frame,
+        });
+        lazy.setTimeout(
+          () => {
+            this.#sliding.delete(aWindow);
+            if (!aWindow.closed) {
+              Cocoa.setUnconstrained(target, false);
+            }
+          },
+          SETTLE_DURATION * 1000 + 50
+        );
+      }, SLIDE_IN_DURATION * 1000);
     } catch (ex) {
       console.error("Little windows: could not reveal", ex);
+      this.#sliding.delete(aWindow);
       if (nativeWindow) {
         Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 1);
       }
@@ -474,11 +497,13 @@ class nsZenLittleWindows {
 
 const IS_MAC = AppConstants.platform === "macosx";
 const REVEAL_AT_THE_LATEST_MS = 1500;
-const SLIDE_IN_DURATION = 0.5;
+const SLIDE_IN_DURATION = 0.4;
+const SETTLE_DURATION = 0.22;
 const SLIDE_OUT_DURATION = 0.24;
-// An overshoot like Hyprland's (0.05, 0.9, 0.1, 1.1), eased in more gently:
-// over a slide the height of the screen, that one is over in a frame or two.
-const OVERSHOOT_CURVE = [0.2, 1.08, 0.4, 1];
+// How far past its place a window goes before settling back, in points.
+const BOUNCE = 22;
+const EASE_OUT_CURVE = [0.22, 1, 0.36, 1];
+const EASE_IN_OUT_CURVE = [0.37, 0, 0.63, 1];
 const EASE_IN_CURVE = [0.55, 0, 0.9, 0.4];
 
 // Section: macOS
