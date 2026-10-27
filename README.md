@@ -9,7 +9,7 @@
 >
 > - **Little windows** (Arc's "Little Arc"): <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> or File › New Little Window opens a small window for a quick look at a page. Its toolbar shows the space the page is headed to, and **Open in _Space_** (<kbd>⌘</kbd><kbd>O</kbd>) moves it into that space. Links from other apps open in one too (`zen.little-window.open-external-links`).
 >   On macOS the shortcut works from any app while Super Zen is running: the window floats over the app in use, even a fullscreen one, and closing it goes back to that app (`zen.little-window.global-shortcut`). Arc takes the same shortcut while it runs.
->   Little windows slide down from the top of the screen like a Hyprland dropdown terminal, and wear a light blue "cyber" theme after Blue Archive (`zen.little-window.theme`: `cyber`, or `space` for the space's own colors).
+>   Little windows slide down from the top of the screen like a Hyprland dropdown terminal, and wear a light blue "cyber" theme after Blue Archive (`zen.little-window.theme`: `cyber`, or `space` for the space's own colors). One is kept ready out of sight so the next shows at once (`zen.little-window.preload`).
 > - **Arc import**: `tools/arc-import/import_arc.py` brings over every Arc profile as its own container, with history, passwords, payment cards, cookies (so you stay signed in), spaces, pinned tabs and favorites.
 >
 > Sync is plain Firefox Sync, so sign in with your Mozilla account as in Zen. Build: `npm run init`, `npx surfer set brand superzen`, `npm run build`, then `cd engine && ./mach package`.

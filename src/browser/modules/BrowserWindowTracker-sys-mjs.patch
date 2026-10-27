@@ -1,8 +1,31 @@
 diff --git a/browser/modules/BrowserWindowTracker.sys.mjs b/browser/modules/BrowserWindowTracker.sys.mjs
-index 7e2f1d2b9ca10bd48fa1a0cd1f175a99b4169b90..505d6fc5110b99c73a0054abbe098c154227cf50 100644
+index d90f63e373a7cdc7caee4ff5b9d94a5a57febece..c1fd078cf3029d338c987b4057268176005fc716 100644
 --- a/browser/modules/BrowserWindowTracker.sys.mjs
 +++ b/browser/modules/BrowserWindowTracker.sys.mjs
-@@ -330,6 +330,7 @@ export const BrowserWindowTracker = {
+@@ -147,7 +147,13 @@ var WindowHelper = {
+       window.addEventListener(event, _handleEvent);
+     });
+ 
+-    _trackWindowOrder(window);
++    // Zen keeps a little window ready, unseen, which mustn't become the
++    // window pages open in until it is used.
++    if (window.document.documentElement.hasAttribute("zen-little-window-spare")) {
++      _trackedWindows.push(window);
++    } else {
++      _trackWindowOrder(window);
++    }
+ 
+     // Update the selected tab's content outer window ID.
+     _updateCurrentBrowserId(window.gBrowser.selectedBrowser);
+@@ -211,6 +217,7 @@ export const BrowserWindowTracker = {
+       if (
+         !win.closed &&
+         !win.document.documentElement.hasAttribute("mini-window") &&
++        !win.document.documentElement.hasAttribute("zen-little-window-spare") &&
+         (options.allowPopups || win.toolbar.visible) &&
+         (options.allowTaskbarTabs ||
+           !win.document.documentElement.hasAttribute("taskbartab")) &&
+@@ -343,6 +350,7 @@ export const BrowserWindowTracker = {
        args = null,
        remote = undefined,
        fission = undefined,
@@ -10,7 +33,7 @@ index 7e2f1d2b9ca10bd48fa1a0cd1f175a99b4169b90..505d6fc5110b99c73a0054abbe098c15
      } = options;
  
      args = lazy.AIWindow.handleAIWindowOptions(options);
-@@ -386,6 +387,12 @@ export const BrowserWindowTracker = {
+@@ -399,6 +407,12 @@ export const BrowserWindowTracker = {
        windowFeatures,
        args
      );

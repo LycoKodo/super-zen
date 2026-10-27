@@ -26,3 +26,8 @@
 # "space": the space's own colors, as Little Arc does.
 - name: zen.little-window.theme
   value: "cyber"
+
+# On macOS, keep a little window ready out of sight, so the next one shows at
+# once instead of starting up first.
+- name: zen.little-window.preload
+  value: true

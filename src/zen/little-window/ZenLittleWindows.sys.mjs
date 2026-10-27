@@ -13,6 +13,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
 });
 
 const GLOBAL_SHORTCUT_PREF = "zen.little-window.global-shortcut";
+const PRELOAD_PREF = "zen.little-window.preload";
 
 /**
  * What little windows share across windows: opening them, where they open,
@@ -28,15 +29,47 @@ class nsZenLittleWindows {
   #unrevealed = new WeakSet();
   // Windows sliding into place, which aren't where they will stay yet.
   #sliding = new WeakSet();
+  // The view AppKit sends keys to, by window, from before AppKit loses
+  // track of it (see #showSmoothly).
+  #views = new WeakMap();
+  // A little window kept ready and out of sight, so the next one shows at
+  // once instead of starting up first (see #makeSpare).
+  #spare = null;
+  #spareReady = false;
+  #spareTimer = null;
   #hotKey = null;
 
   constructor() {
     Services.prefs.addObserver(GLOBAL_SHORTCUT_PREF, () =>
       this.#updateGlobalShortcut()
     );
-    Services.prefs.addObserver("zen.little-window.enabled", () =>
-      this.#updateGlobalShortcut()
-    );
+    Services.prefs.addObserver("zen.little-window.enabled", () => {
+      this.#updateGlobalShortcut();
+      this.#updateSpare();
+    });
+    Services.prefs.addObserver(PRELOAD_PREF, () => this.#updateSpare());
+    Services.obs.addObserver(this, "browser-delayed-startup-finished");
+    Services.obs.addObserver(this, "domwindowclosed");
+  }
+
+  observe(aSubject, aTopic) {
+    switch (aTopic) {
+      case "browser-delayed-startup-finished":
+        if (
+          !aSubject.document.documentElement.hasAttribute("zen-little-window")
+        ) {
+          this.#scheduleSpare(SPARE_AFTER_STARTUP_MS);
+        }
+        break;
+      case "domwindowclosed":
+        if (aSubject === this.#spare) {
+          this.#spare = null;
+          this.#spareReady = false;
+        }
+        // Once the window is gone from the list of windows.
+        Services.tm.dispatchToMainThread(() => this.#updateSpare());
+        break;
+    }
   }
 
   get enabled() {
@@ -62,6 +95,41 @@ class nsZenLittleWindows {
   } = {}) {
     const previousApp =
       IS_MAC && !Cocoa.isAppActive() ? Cocoa.frontmostApp() : null;
+    let win = this.#takeSpare();
+    const fromSpare = !!win;
+    if (fromSpare) {
+      this.#place(win, opener);
+      win.gZenLittleWindow.takeOver({
+        url,
+        spaceId: space?.uuid ?? null,
+        triggeringPrincipal,
+      });
+    } else {
+      win = this.#create({ opener, space });
+      win._zenLittleWindow = {
+        spaceId: space?.uuid ?? null,
+        url,
+        triggeringPrincipal,
+      };
+    }
+    if (IS_MAC) {
+      if (previousApp) {
+        this.#previousApps.set(win, previousApp);
+      }
+      this.#showSmoothly(win, { activate: !!previousApp, fromSpare });
+      this.#scheduleSpare(SPARE_AFTER_USE_MS);
+    }
+    return win;
+  }
+
+  /**
+   * @param {object} options
+   * @param {Window} [options.opener]
+   * @param {object} [options.space] - Its container is the one the window
+   *   starts in. Without one, the opener's.
+   * @returns {Window}
+   */
+  #create({ opener = null, space = null }) {
     const { left, top, width, height } = this.#initialBounds(
       opener?.screen ?? this.#primaryScreen()
     );
@@ -80,20 +148,169 @@ class nsZenLittleWindows {
     // Whatever "zen.window-sync.prefer-unsynced-windows" says, a little
     // window is never synced.
     win._zenStartupSyncFlag = "unsynced";
-    win._zenStartupUnsyncedUserContextId =
-      typeof space?.containerTabId === "number" ? space.containerTabId : 0;
-    win._zenLittleWindow = {
-      spaceId: space?.uuid ?? null,
-      url,
-      triggeringPrincipal,
-    };
-    if (IS_MAC) {
-      if (previousApp) {
-        this.#previousApps.set(win, previousApp);
-      }
-      this.#showSmoothly(win, { activate: !!previousApp });
+    if (space || !opener) {
+      win._zenStartupUnsyncedUserContextId =
+        typeof space?.containerTabId === "number" ? space.containerTabId : 0;
     }
     return win;
+  }
+
+  /**
+   * Moves a window kept ready to where a new little window would open.
+   *
+   * @param {Window} aWindow
+   * @param {Window} [aOpener]
+   */
+  #place(aWindow, aOpener) {
+    const { left, top, width, height } = this.#initialBounds(
+      aOpener?.screen ?? this.#primaryScreen()
+    );
+    if (aWindow.innerWidth !== width || aWindow.innerHeight !== height) {
+      aWindow.resizeBy(
+        width - aWindow.innerWidth,
+        height - aWindow.innerHeight
+      );
+    }
+    if (aWindow.screenX !== left || aWindow.screenY !== top) {
+      aWindow.moveTo(left, top);
+    }
+  }
+
+  // Section: the window kept ready
+
+  get #wantsSpare() {
+    return (
+      IS_MAC &&
+      this.enabled &&
+      Services.prefs.getBoolPref(PRELOAD_PREF, true) &&
+      this.#regularWindows.length > 0
+    );
+  }
+
+  get #regularWindows() {
+    return [...Services.wm.getEnumerator("navigator:browser")].filter(
+      win =>
+        !win.closed &&
+        !win.document.documentElement.hasAttribute("zen-little-window")
+    );
+  }
+
+  #scheduleSpare(aDelay) {
+    if (this.#spare || this.#spareTimer || !this.#wantsSpare) {
+      return;
+    }
+    // Starting a window keeps Zen busy for a moment: do it when idle, well
+    // after anything that needs to be smooth.
+    this.#spareTimer = lazy.setTimeout(() => {
+      ChromeUtils.idleDispatch(
+        () => {
+          this.#spareTimer = null;
+          this.#makeSpare();
+        },
+        { timeout: 10000 }
+      );
+    }, aDelay);
+  }
+
+  #updateSpare() {
+    if (this.#wantsSpare) {
+      this.#scheduleSpare(SPARE_AFTER_USE_MS);
+    } else if (this.#spare) {
+      // A window kept ready mustn't be the only one left: clicking Zen in the
+      // Dock would find a window and open none.
+      this.#spare.close();
+      this.#spare = null;
+    }
+  }
+
+  /**
+   * Opens a little window that is never shown: it is put up unseen at the
+   * back, so Zen doesn't show it itself, and put away once started (see
+   * spareReady). Opened last, it would otherwise be the window links open
+   * in; BrowserWindowTracker keeps it last until it is used.
+   */
+  #makeSpare() {
+    if (this.#spare || !this.#wantsSpare) {
+      return;
+    }
+    const win = this.#create({
+      opener: lazy.BrowserWindowTracker.getTopWindow({ private: false }),
+    });
+    win._zenLittleWindow = { spare: true };
+    this.#spare = win;
+    this.#spareReady = false;
+    try {
+      const nativeWindow = Cocoa.nativeWindow(win);
+      this.#views.set(win, Cocoa.call(nativeWindow, "firstResponder"));
+      Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 0);
+      Cocoa.call(
+        nativeWindow,
+        "setIgnoresMouseEvents:",
+        Cocoa.objc.sendWithBool,
+        1
+      );
+      Cocoa.call(
+        nativeWindow,
+        "setExcludedFromWindowsMenu:",
+        Cocoa.objc.sendWithBool,
+        1
+      );
+      // Should anything show it, it is still left out of Accel+` and
+      // Mission Control.
+      Cocoa.call(
+        nativeWindow,
+        "setCollectionBehavior:",
+        Cocoa.objc.sendWithULong,
+        Number(
+          Cocoa.call(nativeWindow, "collectionBehavior", Cocoa.objc.sendULong)
+        ) |
+          NS_IGNORES_CYCLE |
+          NS_TRANSIENT
+      );
+      Cocoa.call(nativeWindow, "orderBack:", Cocoa.objc.sendWithId, null);
+    } catch (ex) {
+      console.error("Little windows: could not keep one ready", ex);
+      this.#spare = null;
+      win.close();
+    }
+  }
+
+  /**
+   * Called by the window kept ready once it has started.
+   *
+   * @param {Window} aWindow
+   */
+  spareReady(aWindow) {
+    if (aWindow !== this.#spare) {
+      return;
+    }
+    const putAway = () => {
+      if (aWindow === this.#spare && !aWindow.closed) {
+        Cocoa.call(
+          Cocoa.nativeWindow(aWindow),
+          "orderOut:",
+          Cocoa.objc.sendWithId,
+          null
+        );
+      }
+    };
+    putAway();
+    // Windows starting alongside, as the session is restored, can show it
+    // again.
+    for (const delay of SPARE_PUT_AWAY_AGAIN_MS) {
+      lazy.setTimeout(putAway, delay);
+    }
+    this.#spareReady = true;
+  }
+
+  #takeSpare() {
+    const spare = this.#spare;
+    if (!spare || !this.#spareReady || spare.closed) {
+      return null;
+    }
+    this.#spare = null;
+    this.#spareReady = false;
+    return spare;
   }
 
   /**
@@ -350,14 +567,31 @@ class nsZenLittleWindows {
    * @param {object} options
    * @param {boolean} options.activate - Make Zen the active app.
    */
-  #showSmoothly(aWindow, { activate }) {
+  #showSmoothly(aWindow, { activate, fromSpare }) {
     let nativeWindow;
     try {
       nativeWindow = Cocoa.nativeWindow(aWindow);
       // Zen's view, which AppKit stops sending keys to once the window is
       // shown this way.
-      const view = Cocoa.call(nativeWindow, "firstResponder");
+      const view =
+        this.#views.get(aWindow) ?? Cocoa.call(nativeWindow, "firstResponder");
       Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 0);
+      if (fromSpare) {
+        // Out of every Space, so it is shown on the one in use.
+        Cocoa.call(nativeWindow, "orderOut:", Cocoa.objc.sendWithId, null);
+        Cocoa.call(
+          nativeWindow,
+          "setIgnoresMouseEvents:",
+          Cocoa.objc.sendWithBool,
+          0
+        );
+        Cocoa.call(
+          nativeWindow,
+          "setExcludedFromWindowsMenu:",
+          Cocoa.objc.sendWithBool,
+          0
+        );
+      }
       const behavior = Number(
         Cocoa.call(nativeWindow, "collectionBehavior", Cocoa.objc.sendULong)
       );
@@ -365,7 +599,13 @@ class nsZenLittleWindows {
         nativeWindow,
         "setCollectionBehavior:",
         Cocoa.objc.sendWithULong,
-        (behavior & ~(NS_FULLSCREEN_PRIMARY | NS_FULLSCREEN_ALLOWS_TILING)) |
+        (behavior &
+          ~(
+            NS_FULLSCREEN_PRIMARY |
+            NS_FULLSCREEN_ALLOWS_TILING |
+            NS_IGNORES_CYCLE |
+            NS_TRANSIENT
+          )) |
           NS_FULLSCREEN_AUXILIARY |
           NS_FULLSCREEN_DISALLOWS_TILING
       );
@@ -387,11 +627,13 @@ class nsZenLittleWindows {
       this.#unrevealed.add(aWindow);
       // Zen would show the window as usual, but finds it already up and
       // leaves it, so it never becomes the key window that way.
-      aWindow.addEventListener(
-        "MozAfterPaint",
-        () => this.#makeKeyOnceActive(aWindow, nativeWindow, view, Date.now()),
-        { once: true }
-      );
+      const makeKey = () =>
+        this.#makeKeyOnceActive(aWindow, nativeWindow, view, Date.now());
+      if (fromSpare) {
+        makeKey();
+      } else {
+        aWindow.addEventListener("MozAfterPaint", makeKey, { once: true });
+      }
       // In case the window never says it has settled.
       lazy.setTimeout(() => this.reveal(aWindow), REVEAL_AT_THE_LATEST_MS);
     } catch (ex) {
@@ -497,13 +739,16 @@ class nsZenLittleWindows {
 
 const IS_MAC = AppConstants.platform === "macosx";
 const REVEAL_AT_THE_LATEST_MS = 1500;
-const SLIDE_IN_DURATION = 0.4;
-const SETTLE_DURATION = 0.22;
-const SLIDE_OUT_DURATION = 0.24;
+const SLIDE_IN_DURATION = 0.3;
+const SETTLE_DURATION = 0.16;
+const SLIDE_OUT_DURATION = 0.2;
 // How far past its place a window goes before settling back, in points.
-const BOUNCE = 22;
+const BOUNCE = 16;
 const EASE_OUT_CURVE = [0.22, 1, 0.36, 1];
 const EASE_IN_OUT_CURVE = [0.37, 0, 0.63, 1];
+const SPARE_AFTER_STARTUP_MS = 5000;
+const SPARE_AFTER_USE_MS = 4000;
+const SPARE_PUT_AWAY_AGAIN_MS = [1000, 4000];
 const EASE_IN_CURVE = [0.55, 0, 0.9, 0.4];
 
 // Section: macOS
@@ -611,6 +856,8 @@ class MacHotKey {
 }
 
 const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL = 1 << 7;
+const NS_TRANSIENT = 1 << 3;
+const NS_IGNORES_CYCLE = 1 << 6;
 const NS_FULLSCREEN_PRIMARY = 1 << 7;
 const NS_FULLSCREEN_AUXILIARY = 1 << 8;
 const NS_FULLSCREEN_ALLOWS_TILING = 1 << 11;

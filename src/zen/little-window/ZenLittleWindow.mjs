@@ -50,11 +50,20 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
         "zen-little-window-theme",
         Services.prefs.getStringPref("zen.little-window.theme", "cyber")
       );
+      if (this.isSpare) {
+        root.setAttribute("zen-little-window-spare", "true");
+      }
     }
   }
 
   get isLittleWindow() {
     return !!window._zenLittleWindow;
+  }
+
+  // Kept ready and out of sight for the next little window to open, see
+  // ZenLittleWindows.
+  get isSpare() {
+    return !!window._zenLittleWindow?.spare;
   }
 
   get enabled() {
@@ -358,6 +367,30 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     this.#initialTab = gBrowser.selectedTab;
     // Spaces are only known once the window has fully started.
     this.#updateToolbar();
+    if (this.isSpare) {
+      lazy.ZenLittleWindows.spareReady(window);
+      return;
+    }
+    this.#start();
+  }
+
+  /**
+   * Makes this window, kept ready, the little window just opened.
+   *
+   * @param {object} options - See open.
+   * @param {string} [options.url]
+   * @param {string} [options.spaceId]
+   * @param {nsIPrincipal} [options.triggeringPrincipal]
+   */
+  takeOver({ url = null, spaceId = null, triggeringPrincipal = null }) {
+    window._zenLittleWindow = { spaceId, url, triggeringPrincipal };
+    document.documentElement.removeAttribute("zen-little-window-spare");
+    this.#targetSpaceId = spaceId;
+    this.#updateToolbar();
+    this.#start();
+  }
+
+  #start() {
     // Opened without a space to aim at, the window doesn't know which
     // container to start in.
     this.#matchSpaceContainer();
@@ -409,10 +442,10 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       if (steadyChecks >= 2 || Date.now() - start > 600) {
         lazy.ZenLittleWindows.reveal(window);
       } else {
-        setTimeout(check, 30);
+        setTimeout(check, 16);
       }
     };
-    setTimeout(check, 30);
+    setTimeout(check, 16);
   }
 
   /**
@@ -459,6 +492,10 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   }
 
   #onClosing(event) {
+    // Never shown, so nothing to remember nor to animate.
+    if (this.isSpare) {
+      return;
+    }
     // Saved as closing starts instead, before the window slides away.
     if (event.type === "unload" && !this.#slidOut) {
       lazy.ZenLittleWindows.saveBounds(window);
