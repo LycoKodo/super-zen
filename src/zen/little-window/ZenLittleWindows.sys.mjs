@@ -256,17 +256,17 @@ class nsZenLittleWindows {
         1
       );
       // Should anything show it, it is still left out of Accel+` and
-      // Mission Control.
-      Cocoa.call(
-        nativeWindow,
-        "setCollectionBehavior:",
-        Cocoa.objc.sendWithULong,
-        Number(
-          Cocoa.call(nativeWindow, "collectionBehavior", Cocoa.objc.sendULong)
-        ) |
+      // Mission Control. It is put up on the Space in use, which it then
+      // stays on, even a fullscreen app's (see #showSmoothly).
+      Cocoa.updateCollectionBehavior(nativeWindow, {
+        add:
           NS_IGNORES_CYCLE |
-          NS_TRANSIENT
-      );
+          NS_TRANSIENT |
+          NS_FULLSCREEN_AUXILIARY |
+          NS_FULLSCREEN_DISALLOWS_TILING,
+        remove: NS_FULLSCREEN_PRIMARY | NS_FULLSCREEN_ALLOWS_TILING,
+      });
+      Cocoa.setNonActivating(nativeWindow, true);
       Cocoa.call(nativeWindow, "orderBack:", Cocoa.objc.sendWithId, null);
     } catch (ex) {
       console.error("Little windows: could not keep one ready", ex);
@@ -310,6 +310,18 @@ class nsZenLittleWindows {
     }
     this.#spare = null;
     this.#spareReady = false;
+    // macOS would switch to the Space it was put up on to show it. A new
+    // window opens on the Space in use, and the next one is kept ready there.
+    if (
+      !Cocoa.call(
+        Cocoa.nativeWindow(spare),
+        "isOnActiveSpace",
+        Cocoa.objc.sendBool
+      )
+    ) {
+      spare.close();
+      return null;
+    }
     return spare;
   }
 
@@ -558,9 +570,9 @@ class nsZenLittleWindows {
    * Zen's key window, which would otherwise be the last regular window used.
    *
    * It joins the Space in use, even a fullscreen app's. macOS places a
-   * window on a Space as it is first shown, and only lets an auxiliary,
-   * non-activating one join another app's fullscreen Space, as Gecko's
-   * Picture-in-Picture player does. It stays non-activating only until it
+   * window on a Space as it is first shown, for good, and only lets an
+   * auxiliary, non-activating one join another app's fullscreen Space, as
+   * Gecko's Picture-in-Picture player does. It stays non-activating only until it
    * is key, so a click still brings Zen forward later.
    *
    * @param {Window} aWindow
@@ -577,7 +589,7 @@ class nsZenLittleWindows {
         this.#views.get(aWindow) ?? Cocoa.call(nativeWindow, "firstResponder");
       Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 0);
       if (fromSpare) {
-        // Out of every Space, so it is shown on the one in use.
+        // Anything may have shown it.
         Cocoa.call(nativeWindow, "orderOut:", Cocoa.objc.sendWithId, null);
         Cocoa.call(
           nativeWindow,
@@ -592,23 +604,14 @@ class nsZenLittleWindows {
           0
         );
       }
-      const behavior = Number(
-        Cocoa.call(nativeWindow, "collectionBehavior", Cocoa.objc.sendULong)
-      );
-      Cocoa.call(
-        nativeWindow,
-        "setCollectionBehavior:",
-        Cocoa.objc.sendWithULong,
-        (behavior &
-          ~(
-            NS_FULLSCREEN_PRIMARY |
-            NS_FULLSCREEN_ALLOWS_TILING |
-            NS_IGNORES_CYCLE |
-            NS_TRANSIENT
-          )) |
-          NS_FULLSCREEN_AUXILIARY |
-          NS_FULLSCREEN_DISALLOWS_TILING
-      );
+      Cocoa.updateCollectionBehavior(nativeWindow, {
+        add: NS_FULLSCREEN_AUXILIARY | NS_FULLSCREEN_DISALLOWS_TILING,
+        remove:
+          NS_FULLSCREEN_PRIMARY |
+          NS_FULLSCREEN_ALLOWS_TILING |
+          NS_IGNORES_CYCLE |
+          NS_TRANSIENT,
+      });
       Cocoa.setNonActivating(nativeWindow, true);
       Cocoa.call(
         nativeWindow,
@@ -949,6 +952,18 @@ const Cocoa = {
     if (aApp) {
       this.call(aApp, "release", this.objc.send);
     }
+  },
+
+  updateCollectionBehavior(aNativeWindow, { add = 0, remove = 0 }) {
+    const behavior = Number(
+      this.call(aNativeWindow, "collectionBehavior", this.objc.sendULong)
+    );
+    this.call(
+      aNativeWindow,
+      "setCollectionBehavior:",
+      this.objc.sendWithULong,
+      (behavior & ~remove) | add
+    );
   },
 
   // Gecko's windows keep this style even though they aren't panels.
