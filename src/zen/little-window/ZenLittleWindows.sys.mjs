@@ -36,8 +36,9 @@ class nsZenLittleWindows {
   #unrevealed = new WeakSet();
   // Windows sliding into place, which aren't where they will stay yet.
   #sliding = new WeakSet();
-  // Windows still showing as the search bar they start as, see open.
-  #searchBars = new WeakSet();
+  // Windows still showing as the search bar they start as, see open, by
+  // where they were put.
+  #searchBars = new WeakMap();
   // The view AppKit sends keys to, by window, from before AppKit loses
   // track of it (see #showSmoothly).
   #views = new WeakMap();
@@ -128,7 +129,7 @@ class nsZenLittleWindows {
     if (fromSpare) {
       // Before it asks where to go, which the sites provider tells by.
       if (searchFirst) {
-        this.#searchBars.add(win);
+        this.#searchBars.set(win, bounds);
       }
       this.#place(win, bounds);
       win.gZenLittleWindow.takeOver({
@@ -146,7 +147,7 @@ class nsZenLittleWindows {
         searchFirst,
       };
       if (searchFirst) {
-        this.#searchBars.add(win);
+        this.#searchBars.set(win, bounds);
       }
     }
     if (IS_MAC) {
@@ -487,18 +488,19 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Where the search bar a little window starts as opens: centered across
-   * the screen, a little above the middle, as Spotlight does. It grows down
-   * with its results.
+   * Where the search bar a little window starts as opens: along the top of
+   * where the little window will, centered across it, as Little Arc's does.
+   * It grows down with its results.
    *
    * @param {{availLeft: number, availTop: number, availWidth: number, availHeight: number}} aScreen
    * @returns {{left: number, top: number, width: number, height: number}}
    */
-  #searchBarBounds({ availLeft, availTop, availWidth, availHeight }) {
-    const width = Math.min(SEARCH_BAR_WIDTH, availWidth);
+  #searchBarBounds(aScreen) {
+    const windowBounds = this.#initialBounds(aScreen);
+    const width = Math.min(SEARCH_BAR_WIDTH, windowBounds.width);
     return {
-      left: Math.round(availLeft + (availWidth - width) / 2),
-      top: Math.round(availTop + availHeight * SEARCH_BAR_TOP),
+      left: windowBounds.left + Math.round((windowBounds.width - width) / 2),
+      top: windowBounds.top,
       width,
       height: SEARCH_BAR_HEIGHT,
     };
@@ -532,10 +534,13 @@ class nsZenLittleWindows {
    * @param {Window} aWindow
    */
   saveBounds(aWindow) {
+    if (this.#searchBars.has(aWindow)) {
+      this.#saveSearchBarPlace(aWindow);
+      return;
+    }
     if (
       aWindow.windowState !== aWindow.STATE_NORMAL ||
-      this.#sliding.has(aWindow) ||
-      this.#searchBars.has(aWindow)
+      this.#sliding.has(aWindow)
     ) {
       return;
     }
@@ -545,6 +550,21 @@ class nsZenLittleWindows {
     Services.prefs.setStringPref(
       "zen.little-window.position",
       `${aWindow.screenX},${aWindow.screenY}`
+    );
+  }
+
+  // A search bar that was moved moves where the little window opens.
+  #saveSearchBarPlace(aWindow) {
+    const { left, top } = this.#searchBars.get(aWindow);
+    if (aWindow.screenX === left && aWindow.screenY === top) {
+      return;
+    }
+    const { width } = this.#initialBounds(aWindow.screen);
+    const windowLeft =
+      aWindow.screenX - Math.round((width - aWindow.innerWidth) / 2);
+    Services.prefs.setStringPref(
+      "zen.little-window.position",
+      `${windowLeft},${aWindow.screenY}`
     );
   }
 
@@ -867,10 +887,14 @@ class nsZenLittleWindows {
     if (!this.#searchBars.has(aWindow)) {
       return;
     }
+    this.#saveSearchBarPlace(aWindow);
     this.#searchBars.delete(aWindow);
     try {
       const nativeWindow = Cocoa.nativeWindow(aWindow);
       Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 0);
+      // Out of sight now, not once Zen is next idle: the window may be
+      // drawn laid out anew before that.
+      Cocoa.flush();
       Cocoa.styleAsSearchBar(nativeWindow, false);
     } catch (ex) {
       console.error("Little windows: could not restyle", ex);
@@ -999,11 +1023,9 @@ const EASE_IN_CURVE = [0.55, 0, 0.9, 0.4];
 const FADE_IN_DURATION = 0.16;
 const FADE_OUT_DURATION = 0.1;
 const SEARCH_BAR_WATCH_MS = 100;
-// The search bar's size before it fits its results, in points, and where
-// its top goes, as a share of the screen's height.
+// The search bar's size before it fits its results, in points.
 const SEARCH_BAR_WIDTH = 560;
 const SEARCH_BAR_HEIGHT = 66;
-const SEARCH_BAR_TOP = 0.24;
 const SEARCH_BAR_SITES = 5;
 const SITES_PROVIDER_NAME = "ZenLittleWindowSites";
 
@@ -1354,6 +1376,11 @@ const Cocoa = {
     }
     const { mainConnection, activeSpace } = this._skyLight;
     return String(activeSpace(mainConnection()));
+  },
+
+  // Sends the changes made to windows so far to the screen.
+  flush() {
+    this.call(this.objc.getClass("CATransaction"), "flush", this.objc.send);
   },
 
   // Lets a window go past the top of its screen, which AppKit doesn't let
