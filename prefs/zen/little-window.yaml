@@ -18,6 +18,11 @@
 - name: zen.little-window.position
   value: ""
 
+# Where the search bar was last moved to, as "x,y". Empty to open it along
+# the top of where the little window opens.
+- name: zen.little-window.search-bar-position
+  value: ""
+
 # On macOS, the shortcut for little windows also works from other apps.
 - name: zen.little-window.global-shortcut
   value: true

@@ -21,6 +21,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
 const GLOBAL_SHORTCUT_PREF = "zen.little-window.global-shortcut";
 const PRELOAD_PREF = "zen.little-window.preload";
 const SEARCH_FIRST_PREF = "zen.little-window.search-first";
+const POSITION_PREF = "zen.little-window.position";
+const SEARCH_BAR_POSITION_PREF = "zen.little-window.search-bar-position";
 
 /**
  * What little windows share across windows: opening them, where they open,
@@ -459,7 +461,7 @@ class nsZenLittleWindows {
   #initialBounds(aScreen) {
     let width = Services.prefs.getIntPref("zen.little-window.width", 960);
     let height = Services.prefs.getIntPref("zen.little-window.height", 680);
-    const place = this.#savedPlace();
+    const place = this.#savedPlace(POSITION_PREF);
     if (place) {
       const { left, top } = place;
       const { availLeft, availTop, availWidth, availHeight } = this.#screenAt(
@@ -470,8 +472,7 @@ class nsZenLittleWindows {
       );
       width = Math.min(width, availWidth);
       height = Math.min(height, availHeight);
-      // Screens may have been rearranged since, or the search bar moved
-      // where the window doesn't fit: keep the window on a screen.
+      // Screens may have been rearranged since: keep the window on one.
       return {
         left: clamp(left, availLeft, availWidth, width),
         top: clamp(top, availTop, availHeight, height),
@@ -491,10 +492,10 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Where the search bar a little window starts as opens: along the top of
-   * where the little window will, centered across it, as Little Arc's does.
-   * It grows down with its results. Moved, it stays where it was put, even
-   * where the little window doesn't fit and opens as close as it can.
+   * Where the search bar a little window starts as opens: where it was last
+   * moved to, or else along the top of where the little window will, and
+   * centered across it, as Little Arc's does. It grows down with its
+   * results.
    *
    * @param {{availLeft: number, availTop: number, availWidth: number, availHeight: number}} aScreen
    * @returns {{left: number, top: number, width: number, height: number}}
@@ -502,20 +503,18 @@ class nsZenLittleWindows {
   #searchBarBounds(aScreen) {
     const windowBounds = this.#initialBounds(aScreen);
     const width = Math.min(SEARCH_BAR_WIDTH, windowBounds.width);
-    const { left, top } = this.#savedPlace() ?? windowBounds;
+    const { left, top } = this.#savedPlace(SEARCH_BAR_POSITION_PREF) ?? {
+      left: windowBounds.left + Math.round((windowBounds.width - width) / 2),
+      top: windowBounds.top,
+    };
     const { availLeft, availTop, availWidth, availHeight } = this.#screenAt(
       left,
       top,
-      windowBounds.width,
+      width,
       SEARCH_BAR_MAX_HEIGHT
     );
     return {
-      left: clamp(
-        left + Math.round((windowBounds.width - width) / 2),
-        availLeft,
-        availWidth,
-        width
-      ),
+      left: clamp(left, availLeft, availWidth, width),
       // With room below for its results.
       top: clamp(top, availTop, availHeight, SEARCH_BAR_MAX_HEIGHT),
       width,
@@ -523,11 +522,14 @@ class nsZenLittleWindows {
     };
   }
 
-  // Where the last little window was left, or its search bar moved to, if
-  // anywhere.
-  #savedPlace() {
+  /**
+   * @param {string} aPref - Where a little window or its search bar was
+   *   last left, as "left,top".
+   * @returns {{left: number, top: number}|null}
+   */
+  #savedPlace(aPref) {
     const [left, top] = Services.prefs
-      .getStringPref("zen.little-window.position", "")
+      .getStringPref(aPref, "")
       .split(",")
       .map(value => parseInt(value, 10));
     return Number.isFinite(left) && Number.isFinite(top) ? { left, top } : null;
@@ -586,30 +588,25 @@ class nsZenLittleWindows {
     // The width and height a window is opened with are its inner size.
     Services.prefs.setIntPref("zen.little-window.width", aWindow.innerWidth);
     Services.prefs.setIntPref("zen.little-window.height", aWindow.innerHeight);
-    // Its place only once moved: put somewhere else to fit on the screen, it
-    // isn't where its search bar was left.
+    // Its place only once moved, not one it was put in to fit on a screen.
     const placed = this.#placed.get(aWindow);
     if (aWindow.screenX !== placed?.left || aWindow.screenY !== placed?.top) {
       Services.prefs.setStringPref(
-        "zen.little-window.position",
+        POSITION_PREF,
         `${aWindow.screenX},${aWindow.screenY}`
       );
     }
   }
 
-  // A search bar that was moved moves where the little window opens.
+  // A search bar opens where it was last moved to.
   #saveSearchBarPlace(aWindow) {
     const { left, top } = this.#searchBars.get(aWindow);
-    if (aWindow.screenX === left && aWindow.screenY === top) {
-      return;
+    if (aWindow.screenX !== left || aWindow.screenY !== top) {
+      Services.prefs.setStringPref(
+        SEARCH_BAR_POSITION_PREF,
+        `${aWindow.screenX},${aWindow.screenY}`
+      );
     }
-    const { width } = this.#initialBounds(aWindow.screen);
-    const windowLeft =
-      aWindow.screenX - Math.round((width - aWindow.innerWidth) / 2);
-    Services.prefs.setStringPref(
-      "zen.little-window.position",
-      `${windowLeft},${aWindow.screenY}`
-    );
   }
 
   // Section: opening from any app

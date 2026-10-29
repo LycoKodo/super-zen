@@ -43,7 +43,7 @@ Super Zen is a separate app with its own profile, so it runs side by side with Z
 
 | | |
 | --- | --- |
-| Open one | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> from any app while Super Zen is running, or **File › New Little Window**. A search bar fades in first, like Little Arc's, along the top of where the little window opens |
+| Open one | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> from any app while Super Zen is running, or **File › New Little Window**. A search bar fades in first, like Little Arc's, along the top of where the little window opens until you move it |
 | Go somewhere | Type a URL or a search, or pick one of the sites you visit most. <kbd>Enter</kbd> opens the highlighted one, and the little window slides in with it |
 | Never mind | <kbd>Esc</kbd>, the ✕ or <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> again takes you back to the app you were in. Clicking anywhere else puts it away too |
 | Pick its space | The space button in the toolbar shows where the page will go. Click it to choose another |
@@ -52,7 +52,7 @@ Super Zen is a separate app with its own profile, so it runs side by side with Z
 
 - **Works everywhere.** It opens on whatever desktop or fullscreen app you're in, without switching Spaces or bringing your main window forward.
 - **Feels instant.** One little window is kept ready, hidden. The search bar shows up in about 40 ms, and the window slides down from under the menu bar like a Hyprland dropdown terminal, with a small bounce.
-- **Remembers itself.** Move or resize one, and the next opens in the same place and size. Dragging the search bar by its search row moves where the window opens too.
+- **Remembers itself.** Move or resize one, and the next opens in the same place and size. The search bar remembers its own place too: drag it by its search row, say into a corner, and it opens there from then on.
 - **Links from other apps** (Mail, Slack, …) open in a little window too, like in Arc.
 - **Cyber theme**: sky blue and white with cyan glows and slanted tags, after Blue Archive, on the search bar and the window. Switch to `space` to use your space's own colors, like Little Arc.
 
