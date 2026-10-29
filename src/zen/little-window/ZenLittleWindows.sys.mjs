@@ -36,6 +36,9 @@ class nsZenLittleWindows {
   #unrevealed = new WeakSet();
   // Windows sliding into place, which aren't where they will stay yet.
   #sliding = new WeakSet();
+  // Where windows were put, by window, to tell whether they were moved
+  // since (see saveBounds).
+  #placed = new WeakMap();
   // Windows still showing as the search bar they start as, see open, by
   // where they were put.
   #searchBars = new WeakMap();
@@ -254,6 +257,7 @@ class nsZenLittleWindows {
       features: `width=${width},height=${height},left=${left},top=${top}`,
       zenSyncedWindow: false,
     });
+    this.#placed.set(win, { left, top });
     // Whatever "zen.window-sync.prefer-unsynced-windows" says, a little
     // window is never synced.
     win._zenStartupSyncFlag = "unsynced";
@@ -271,6 +275,7 @@ class nsZenLittleWindows {
    * @param {object} aBounds - See #initialBounds.
    */
   #place(aWindow, { left, top, width, height }) {
+    this.#placed.set(aWindow, { left, top });
     if (aWindow.innerWidth !== width || aWindow.innerHeight !== height) {
       aWindow.resizeBy(
         width - aWindow.innerWidth,
@@ -454,21 +459,19 @@ class nsZenLittleWindows {
   #initialBounds(aScreen) {
     let width = Services.prefs.getIntPref("zen.little-window.width", 960);
     let height = Services.prefs.getIntPref("zen.little-window.height", 680);
-    const [left, top] = Services.prefs
-      .getStringPref("zen.little-window.position", "")
-      .split(",")
-      .map(value => parseInt(value, 10));
-    if (Number.isFinite(left) && Number.isFinite(top)) {
-      const { availLeft, availTop, availWidth, availHeight } = this.#availRect(
-        Cc["@mozilla.org/gfx/screenmanager;1"]
-          .getService(Ci.nsIScreenManager)
-          .screenForRect(left, top, width, height)
+    const place = this.#savedPlace();
+    if (place) {
+      const { left, top } = place;
+      const { availLeft, availTop, availWidth, availHeight } = this.#screenAt(
+        left,
+        top,
+        width,
+        height
       );
       width = Math.min(width, availWidth);
       height = Math.min(height, availHeight);
-      // Screens may have been rearranged since: keep the window on one.
-      const clamp = (value, start, size, length) =>
-        Math.min(Math.max(value, start), start + size - length);
+      // Screens may have been rearranged since, or the search bar moved
+      // where the window doesn't fit: keep the window on a screen.
       return {
         left: clamp(left, availLeft, availWidth, width),
         top: clamp(top, availTop, availHeight, height),
@@ -490,7 +493,8 @@ class nsZenLittleWindows {
   /**
    * Where the search bar a little window starts as opens: along the top of
    * where the little window will, centered across it, as Little Arc's does.
-   * It grows down with its results.
+   * It grows down with its results. Moved, it stays where it was put, even
+   * where the little window doesn't fit and opens as close as it can.
    *
    * @param {{availLeft: number, availTop: number, availWidth: number, availHeight: number}} aScreen
    * @returns {{left: number, top: number, width: number, height: number}}
@@ -498,12 +502,43 @@ class nsZenLittleWindows {
   #searchBarBounds(aScreen) {
     const windowBounds = this.#initialBounds(aScreen);
     const width = Math.min(SEARCH_BAR_WIDTH, windowBounds.width);
+    const { left, top } = this.#savedPlace() ?? windowBounds;
+    const { availLeft, availTop, availWidth, availHeight } = this.#screenAt(
+      left,
+      top,
+      windowBounds.width,
+      SEARCH_BAR_MAX_HEIGHT
+    );
     return {
-      left: windowBounds.left + Math.round((windowBounds.width - width) / 2),
-      top: windowBounds.top,
+      left: clamp(
+        left + Math.round((windowBounds.width - width) / 2),
+        availLeft,
+        availWidth,
+        width
+      ),
+      // With room below for its results.
+      top: clamp(top, availTop, availHeight, SEARCH_BAR_MAX_HEIGHT),
       width,
       height: SEARCH_BAR_HEIGHT,
     };
+  }
+
+  // Where the last little window was left, or its search bar moved to, if
+  // anywhere.
+  #savedPlace() {
+    const [left, top] = Services.prefs
+      .getStringPref("zen.little-window.position", "")
+      .split(",")
+      .map(value => parseInt(value, 10));
+    return Number.isFinite(left) && Number.isFinite(top) ? { left, top } : null;
+  }
+
+  #screenAt(aLeft, aTop, aWidth, aHeight) {
+    return this.#availRect(
+      Cc["@mozilla.org/gfx/screenmanager;1"]
+        .getService(Ci.nsIScreenManager)
+        .screenForRect(aLeft, aTop, aWidth, aHeight)
+    );
   }
 
   #primaryScreen() {
@@ -534,6 +569,10 @@ class nsZenLittleWindows {
    * @param {Window} aWindow
    */
   saveBounds(aWindow) {
+    // Never shown.
+    if (aWindow === this.#spare) {
+      return;
+    }
     if (this.#searchBars.has(aWindow)) {
       this.#saveSearchBarPlace(aWindow);
       return;
@@ -547,10 +586,15 @@ class nsZenLittleWindows {
     // The width and height a window is opened with are its inner size.
     Services.prefs.setIntPref("zen.little-window.width", aWindow.innerWidth);
     Services.prefs.setIntPref("zen.little-window.height", aWindow.innerHeight);
-    Services.prefs.setStringPref(
-      "zen.little-window.position",
-      `${aWindow.screenX},${aWindow.screenY}`
-    );
+    // Its place only once moved: put somewhere else to fit on the screen, it
+    // isn't where its search bar was left.
+    const placed = this.#placed.get(aWindow);
+    if (aWindow.screenX !== placed?.left || aWindow.screenY !== placed?.top) {
+      Services.prefs.setStringPref(
+        "zen.little-window.position",
+        `${aWindow.screenX},${aWindow.screenY}`
+      );
+    }
   }
 
   // A search bar that was moved moves where the little window opens.
@@ -1026,8 +1070,14 @@ const SEARCH_BAR_WATCH_MS = 100;
 // The search bar's size before it fits its results, in points.
 const SEARCH_BAR_WIDTH = 560;
 const SEARCH_BAR_HEIGHT = 66;
+// About as tall as it gets with its results.
+const SEARCH_BAR_MAX_HEIGHT = 330;
 const SEARCH_BAR_SITES = 5;
 const SITES_PROVIDER_NAME = "ZenLittleWindowSites";
+
+// Moves a length along a screen so it fits on it.
+const clamp = (aValue, aStart, aSize, aLength) =>
+  Math.min(Math.max(aValue, aStart), aStart + aSize - aLength);
 
 // Section: macOS
 
