@@ -9,11 +9,18 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   ctypes: "resource://gre/modules/ctypes.sys.mjs",
+  NewTabUtils: "resource://gre/modules/NewTabUtils.sys.mjs",
+  ProvidersManager:
+    "moz-src:///browser/components/urlbar/UrlbarProvidersManager.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
+  UrlbarProvider: "moz-src:///browser/components/urlbar/UrlbarUtils.sys.mjs",
+  UrlbarResult: "chrome://browser/content/urlbar/UrlbarResult.mjs",
+  UrlbarShared: "chrome://browser/content/urlbar/UrlbarShared.mjs",
 });
 
 const GLOBAL_SHORTCUT_PREF = "zen.little-window.global-shortcut";
 const PRELOAD_PREF = "zen.little-window.preload";
+const SEARCH_FIRST_PREF = "zen.little-window.search-first";
 
 /**
  * What little windows share across windows: opening them, where they open,
@@ -29,6 +36,8 @@ class nsZenLittleWindows {
   #unrevealed = new WeakSet();
   // Windows sliding into place, which aren't where they will stay yet.
   #sliding = new WeakSet();
+  // Windows still showing as the search bar they start as, see open.
+  #searchBars = new WeakSet();
   // The view AppKit sends keys to, by window, from before AppKit loses
   // track of it (see #showSmoothly).
   #views = new WeakMap();
@@ -36,6 +45,8 @@ class nsZenLittleWindows {
   // once instead of starting up first (see #makeSpare).
   #spare = null;
   #spareReady = false;
+  // The Space the window kept ready was put up on, see #takeSpare.
+  #spareSpace = null;
   #spareTimer = null;
   #hotKey = null;
 
@@ -77,7 +88,9 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Opens a little window.
+   * Opens a little window. Opened without a page on macOS, it asks where to
+   * go first in a small search bar, as Little Arc does, and becomes the
+   * window itself once a page is picked (see expandSearchBar).
    *
    * @param {object} [options]
    * @param {Window} [options.opener] - The window it is opened from.
@@ -93,33 +106,129 @@ class nsZenLittleWindows {
     space = null,
     triggeringPrincipal = null,
   } = {}) {
+    const searchFirst =
+      IS_MAC && !url && Services.prefs.getBoolPref(SEARCH_FIRST_PREF, true);
+    // The shortcut puts away a search bar that is up, as with Spotlight.
+    const searchBar = searchFirst && this.#openSearchBar;
+    if (searchBar) {
+      searchBar.close();
+      return searchBar;
+    }
     const previousApp =
       IS_MAC && !Cocoa.isAppActive() ? Cocoa.frontmostApp() : null;
+    const screen = opener?.screen ?? this.#primaryScreen();
+    const bounds = searchFirst
+      ? this.#searchBarBounds(screen)
+      : this.#initialBounds(screen);
+    if (searchFirst) {
+      this.#addSitesProvider();
+    }
     let win = this.#takeSpare();
     const fromSpare = !!win;
     if (fromSpare) {
-      this.#place(win, opener);
+      // Before it asks where to go, which the sites provider tells by.
+      if (searchFirst) {
+        this.#searchBars.add(win);
+      }
+      this.#place(win, bounds);
       win.gZenLittleWindow.takeOver({
         url,
         spaceId: space?.uuid ?? null,
         triggeringPrincipal,
+        searchFirst,
       });
     } else {
-      win = this.#create({ opener, space });
+      win = this.#create({ opener, space, bounds });
       win._zenLittleWindow = {
         spaceId: space?.uuid ?? null,
         url,
         triggeringPrincipal,
+        searchFirst,
       };
+      if (searchFirst) {
+        this.#searchBars.add(win);
+      }
     }
     if (IS_MAC) {
       if (previousApp) {
         this.#previousApps.set(win, previousApp);
       }
-      this.#showSmoothly(win, { activate: !!previousApp, fromSpare });
+      this.#showSmoothly(win, {
+        activate: !!previousApp,
+        fromSpare,
+        searchFirst,
+      });
       this.#scheduleSpare(SPARE_AFTER_USE_MS);
     }
     return win;
+  }
+
+  get #openSearchBar() {
+    return (
+      [...Services.wm.getEnumerator("navigator:browser")].find(
+        win => !win.closed && this.#searchBars.has(win)
+      ) ?? null
+    );
+  }
+
+  /**
+   * Suggests the sites visited most in a search bar before anything is
+   * typed, as Little Arc does. Firefox's top sites would, but Zen turns them
+   * off, and the address bar suggests nothing there otherwise.
+   */
+  #addSitesProvider() {
+    const manager = lazy.ProvidersManager.getInstanceForSap("urlbar");
+    if (manager.getProvider(SITES_PROVIDER_NAME)) {
+      return;
+    }
+    // A search bar goes away as soon as another window is picked, so the
+    // address bar asking is its own.
+    const isAsking = () => !!this.#openSearchBar;
+    const { UrlbarResult, UrlbarShared } = lazy;
+    class SitesProvider extends lazy.UrlbarProvider {
+      get name() {
+        return SITES_PROVIDER_NAME;
+      }
+
+      get type() {
+        return UrlbarShared.PROVIDER_TYPE.PROFILE;
+      }
+
+      async isActive(queryContext) {
+        return (
+          !queryContext.searchString &&
+          !queryContext.isPrivate &&
+          !queryContext.searchMode &&
+          isAsking()
+        );
+      }
+
+      // That of Firefox's top sites, which would hold the others back.
+      getPriority() {
+        return 1;
+      }
+
+      async startQuery(queryContext, addCallback) {
+        const sites = await lazy.NewTabUtils.activityStreamLinks.getTopSites({
+          numItems: SEARCH_BAR_SITES,
+        });
+        for (const site of sites) {
+          addCallback(
+            this,
+            new UrlbarResult({
+              type: UrlbarShared.RESULT_TYPE.URL,
+              source: UrlbarShared.RESULT_SOURCE.HISTORY,
+              payload: {
+                url: site.url,
+                title: site.title || "",
+                icon: site.favicon || UrlbarShared.getIconForUrl(site.url),
+              },
+            })
+          );
+        }
+      }
+    }
+    manager.registerProvider(new SitesProvider());
   }
 
   /**
@@ -127,12 +236,11 @@ class nsZenLittleWindows {
    * @param {Window} [options.opener]
    * @param {object} [options.space] - Its container is the one the window
    *   starts in. Without one, the opener's.
+   * @param {object} options.bounds - Where it opens, see #initialBounds.
    * @returns {Window}
    */
-  #create({ opener = null, space = null }) {
-    const { left, top, width, height } = this.#initialBounds(
-      opener?.screen ?? this.#primaryScreen()
-    );
+  #create({ opener = null, space = null, bounds }) {
+    const { left, top, width, height } = bounds;
     // The page is loaded once the window is up: a single URL argument would
     // be split on "|" and loaded as several pages.
     const args = Cc["@mozilla.org/supports-string;1"].createInstance(
@@ -156,15 +264,12 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Moves a window kept ready to where a new little window would open.
+   * Moves a window to where a new little window would open.
    *
    * @param {Window} aWindow
-   * @param {Window} [aOpener]
+   * @param {object} aBounds - See #initialBounds.
    */
-  #place(aWindow, aOpener) {
-    const { left, top, width, height } = this.#initialBounds(
-      aOpener?.screen ?? this.#primaryScreen()
-    );
+  #place(aWindow, { left, top, width, height }) {
     if (aWindow.innerWidth !== width || aWindow.innerHeight !== height) {
       aWindow.resizeBy(
         width - aWindow.innerWidth,
@@ -233,8 +338,18 @@ class nsZenLittleWindows {
     if (this.#spare || !this.#wantsSpare) {
       return;
     }
+    if (Services.prefs.getBoolPref(SEARCH_FIRST_PREF, true)) {
+      this.#addSitesProvider();
+      // The first look in history takes a while, which the first search bar
+      // would wait for.
+      lazy.NewTabUtils.activityStreamLinks
+        .getTopSites({ numItems: SEARCH_BAR_SITES })
+        .catch(console.error);
+    }
+    const opener = lazy.BrowserWindowTracker.getTopWindow({ private: false });
     const win = this.#create({
-      opener: lazy.BrowserWindowTracker.getTopWindow({ private: false }),
+      opener,
+      bounds: this.#initialBounds(opener?.screen ?? this.#primaryScreen()),
     });
     win._zenLittleWindow = { spare: true };
     this.#spare = win;
@@ -267,6 +382,7 @@ class nsZenLittleWindows {
         remove: NS_FULLSCREEN_PRIMARY | NS_FULLSCREEN_ALLOWS_TILING,
       });
       Cocoa.setNonActivating(nativeWindow, true);
+      this.#spareSpace = Cocoa.activeSpace();
       Cocoa.call(nativeWindow, "orderBack:", Cocoa.objc.sendWithId, null);
     } catch (ex) {
       console.error("Little windows: could not keep one ready", ex);
@@ -312,13 +428,15 @@ class nsZenLittleWindows {
     this.#spareReady = false;
     // macOS would switch to the Space it was put up on to show it. A new
     // window opens on the Space in use, and the next one is kept ready there.
-    if (
-      !Cocoa.call(
-        Cocoa.nativeWindow(spare),
-        "isOnActiveSpace",
-        Cocoa.objc.sendBool
-      )
-    ) {
+    // AppKit only tells whether a window is on the Space in use while it is
+    // shown, which this one isn't.
+    let sameSpace = false;
+    try {
+      sameSpace = this.#spareSpace === Cocoa.activeSpace();
+    } catch (ex) {
+      console.error("Little windows: could not tell the Space in use", ex);
+    }
+    if (!sameSpace) {
       spare.close();
       return null;
     }
@@ -368,6 +486,24 @@ class nsZenLittleWindows {
     };
   }
 
+  /**
+   * Where the search bar a little window starts as opens: centered across
+   * the screen, a little above the middle, as Spotlight does. It grows down
+   * with its results.
+   *
+   * @param {{availLeft: number, availTop: number, availWidth: number, availHeight: number}} aScreen
+   * @returns {{left: number, top: number, width: number, height: number}}
+   */
+  #searchBarBounds({ availLeft, availTop, availWidth, availHeight }) {
+    const width = Math.min(SEARCH_BAR_WIDTH, availWidth);
+    return {
+      left: Math.round(availLeft + (availWidth - width) / 2),
+      top: Math.round(availTop + availHeight * SEARCH_BAR_TOP),
+      width,
+      height: SEARCH_BAR_HEIGHT,
+    };
+  }
+
   #primaryScreen() {
     return this.#availRect(
       Cc["@mozilla.org/gfx/screenmanager;1"].getService(Ci.nsIScreenManager)
@@ -398,7 +534,8 @@ class nsZenLittleWindows {
   saveBounds(aWindow) {
     if (
       aWindow.windowState !== aWindow.STATE_NORMAL ||
-      this.#sliding.has(aWindow)
+      this.#sliding.has(aWindow) ||
+      this.#searchBars.has(aWindow)
     ) {
       return;
     }
@@ -483,6 +620,7 @@ class nsZenLittleWindows {
     }
     if (Date.now() - aStart > 1000) {
       Cocoa.setNonActivating(aNativeWindow, false);
+      this.#watchSearchBar(aWindow, aNativeWindow);
       return;
     }
     if (Cocoa.isAppActive()) {
@@ -495,6 +633,7 @@ class nsZenLittleWindows {
     }
     if (Cocoa.call(aNativeWindow, "isKeyWindow", Cocoa.objc.sendBool)) {
       Cocoa.setNonActivating(aNativeWindow, false);
+      this.#watchSearchBar(aWindow, aNativeWindow);
       Cocoa.call(
         aNativeWindow,
         "makeFirstResponder:",
@@ -513,7 +652,34 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Called as a little window starts closing, while it is still the active
+   * Puts a search bar away once another window or app is picked, as with
+   * Spotlight. Gecko doesn't tell when Zen stops being the active app, so
+   * it is checked while the search bar is up.
+   *
+   * @param {Window} aWindow
+   * @param {CData} aNativeWindow
+   */
+  #watchSearchBar(aWindow, aNativeWindow) {
+    let misses = 0;
+    const check = () => {
+      if (aWindow.closed || !this.#searchBars.has(aWindow)) {
+        return;
+      }
+      // Twice in a row, as it can be in between for a moment.
+      misses = Cocoa.call(aNativeWindow, "isKeyWindow", Cocoa.objc.sendBool)
+        ? 0
+        : misses + 1;
+      if (misses >= 2) {
+        aWindow.close();
+      } else {
+        lazy.setTimeout(check, SEARCH_BAR_WATCH_MS);
+      }
+    };
+    check();
+  }
+
+  /**
+   * Called as a little window starts closing, while it is still the key
    * window if it was. Opened from another app with the shortcut, closing it
    * goes back to that app, as with Little Arc, unless the page was opened in
    * a space or another Zen window was picked since.
@@ -534,7 +700,11 @@ class nsZenLittleWindows {
     const goBack =
       !openedInSpace &&
       Cocoa.isAppActive() &&
-      Services.focus.activeWindow === aWindow;
+      !!Cocoa.call(
+        Cocoa.nativeWindow(aWindow),
+        "isKeyWindow",
+        Cocoa.objc.sendBool
+      );
     if (goBack) {
       Cocoa.call(
         previousApp,
@@ -578,8 +748,10 @@ class nsZenLittleWindows {
    * @param {Window} aWindow
    * @param {object} options
    * @param {boolean} options.activate - Make Zen the active app.
+   * @param {boolean} options.fromSpare - It is the window kept ready.
+   * @param {boolean} options.searchFirst - It starts as a search bar.
    */
-  #showSmoothly(aWindow, { activate, fromSpare }) {
+  #showSmoothly(aWindow, { activate, fromSpare, searchFirst }) {
     let nativeWindow;
     try {
       nativeWindow = Cocoa.nativeWindow(aWindow);
@@ -613,6 +785,9 @@ class nsZenLittleWindows {
           NS_TRANSIENT,
       });
       Cocoa.setNonActivating(nativeWindow, true);
+      if (searchFirst) {
+        Cocoa.styleAsSearchBar(nativeWindow, true);
+      }
       Cocoa.call(
         nativeWindow,
         "makeKeyAndOrderFront:",
@@ -649,13 +824,8 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Shows a window put up by #showSmoothly the way Hyprland shows a dropdown
-   * terminal: it slides down into place from above the top of its screen,
-   * out from under the menu bar, and bounces a little as it lands.
-   *
-   * AppKit clamps a timing curve that overshoots, so the bounce is a second
-   * step: the window slides a little past its place, coming to rest there,
-   * and settles back from rest, which hides where one step meets the next.
+   * Shows a window put up by #showSmoothly. A search bar fades in where it
+   * is, as Little Arc's does, and a little window slides in.
    *
    * @param {Window} aWindow
    */
@@ -664,6 +834,67 @@ class nsZenLittleWindows {
       return;
     }
     this.#unrevealed.delete(aWindow);
+    if (!this.#searchBars.has(aWindow)) {
+      this.#slideIn(aWindow);
+      return;
+    }
+    try {
+      Cocoa.animate(Cocoa.nativeWindow(aWindow), {
+        duration: FADE_IN_DURATION,
+        curve: EASE_OUT_CURVE,
+        alpha: 1,
+      });
+    } catch (ex) {
+      console.error("Little windows: could not fade in", ex);
+      Cocoa.call(
+        Cocoa.nativeWindow(aWindow),
+        "setAlphaValue:",
+        Cocoa.objc.sendDouble,
+        1
+      );
+    }
+  }
+
+  /**
+   * Turns the search bar a window started as into the little window, once a
+   * page was picked: the search bar goes, before the address bar closes and
+   * shows the toolbar it sits in, and the window slides in where little
+   * windows open.
+   *
+   * @param {Window} aWindow
+   */
+  expandSearchBar(aWindow) {
+    if (!this.#searchBars.has(aWindow)) {
+      return;
+    }
+    this.#searchBars.delete(aWindow);
+    try {
+      const nativeWindow = Cocoa.nativeWindow(aWindow);
+      Cocoa.call(nativeWindow, "setAlphaValue:", Cocoa.objc.sendDouble, 0);
+      Cocoa.styleAsSearchBar(nativeWindow, false);
+    } catch (ex) {
+      console.error("Little windows: could not restyle", ex);
+    }
+    this.#place(aWindow, this.#initialBounds(aWindow.screen));
+    this.#unrevealed.add(aWindow);
+    // Once laid out at its new size.
+    aWindow.requestAnimationFrame(() =>
+      aWindow.requestAnimationFrame(() => this.reveal(aWindow))
+    );
+  }
+
+  /**
+   * Shows a window the way Hyprland shows a dropdown terminal: it slides
+   * down into place from above the top of its screen, out from under the
+   * menu bar, and bounces a little as it lands.
+   *
+   * AppKit clamps a timing curve that overshoots, so the bounce is a second
+   * step: the window slides a little past its place, coming to rest there,
+   * and settles back from rest, which hides where one step meets the next.
+   *
+   * @param {Window} aWindow
+   */
+  #slideIn(aWindow) {
     let nativeWindow;
     try {
       nativeWindow = Cocoa.nativeWindow(aWindow);
@@ -711,32 +942,44 @@ class nsZenLittleWindows {
   }
 
   /**
-   * Slides a window back up out of sight before it closes, as a dropdown
-   * terminal hides.
+   * Takes a window out of sight before it closes: a little window slides
+   * back up, as a dropdown terminal hides, and a search bar fades away.
    *
    * @param {Window} aWindow
    * @param {Function} aCallback - Called once it is out of sight.
    */
-  slideOut(aWindow, aCallback) {
+  hide(aWindow, aCallback) {
     if (!IS_MAC || aWindow.closed) {
       aCallback();
       return;
     }
+    const searchBar = this.#searchBars.has(aWindow);
     try {
       const nativeWindow = Cocoa.nativeWindow(aWindow);
-      Cocoa.setUnconstrained(nativeWindow, true);
-      Cocoa.animate(nativeWindow, {
-        duration: SLIDE_OUT_DURATION,
-        curve: EASE_IN_CURVE,
-        frame: {
-          ...Cocoa.frame(nativeWindow),
-          y: Cocoa.screenTop(nativeWindow),
-        },
-      });
+      if (searchBar) {
+        Cocoa.animate(nativeWindow, {
+          duration: FADE_OUT_DURATION,
+          curve: EASE_IN_CURVE,
+          alpha: 0,
+        });
+      } else {
+        Cocoa.setUnconstrained(nativeWindow, true);
+        Cocoa.animate(nativeWindow, {
+          duration: SLIDE_OUT_DURATION,
+          curve: EASE_IN_CURVE,
+          frame: {
+            ...Cocoa.frame(nativeWindow),
+            y: Cocoa.screenTop(nativeWindow),
+          },
+        });
+      }
     } catch (ex) {
-      console.error("Little windows: could not slide out", ex);
+      console.error("Little windows: could not hide", ex);
     }
-    lazy.setTimeout(aCallback, SLIDE_OUT_DURATION * 1000);
+    lazy.setTimeout(
+      aCallback,
+      (searchBar ? FADE_OUT_DURATION : SLIDE_OUT_DURATION) * 1000
+    );
   }
 }
 
@@ -753,6 +996,16 @@ const SPARE_AFTER_STARTUP_MS = 5000;
 const SPARE_AFTER_USE_MS = 4000;
 const SPARE_PUT_AWAY_AGAIN_MS = [1000, 4000];
 const EASE_IN_CURVE = [0.55, 0, 0.9, 0.4];
+const FADE_IN_DURATION = 0.16;
+const FADE_OUT_DURATION = 0.1;
+const SEARCH_BAR_WATCH_MS = 100;
+// The search bar's size before it fits its results, in points, and where
+// its top goes, as a share of the screen's height.
+const SEARCH_BAR_WIDTH = 560;
+const SEARCH_BAR_HEIGHT = 66;
+const SEARCH_BAR_TOP = 0.24;
+const SEARCH_BAR_SITES = 5;
+const SITES_PROVIDER_NAME = "ZenLittleWindowSites";
 
 // Section: macOS
 
@@ -858,7 +1111,9 @@ class MacHotKey {
   }
 }
 
+const NS_WINDOW_STYLE_MASK_RESIZABLE = 1 << 3;
 const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL = 1 << 7;
+const NS_WINDOW_BUTTONS = [0, 1, 2]; // Close, minimize and zoom.
 const NS_TRANSIENT = 1 << 3;
 const NS_IGNORES_CYCLE = 1 << 6;
 const NS_FULLSCREEN_PRIMARY = 1 << 7;
@@ -893,6 +1148,7 @@ const Cocoa = {
       sendId: msgSend(id),
       sendBool: msgSend(ctypes.signed_char),
       sendULong: msgSend(ctypes.unsigned_long),
+      sendIdWithULong: msgSend(id, ctypes.unsigned_long),
       sendBoolWithULong: msgSend(ctypes.signed_char, ctypes.unsigned_long),
       send: msgSend(ctypes.void_t),
       sendWithId: msgSend(ctypes.void_t, id),
@@ -966,8 +1222,7 @@ const Cocoa = {
     );
   },
 
-  // Gecko's windows keep this style even though they aren't panels.
-  setNonActivating(aNativeWindow, aValue) {
+  setStyle(aNativeWindow, aStyle, aValue) {
     const mask = Number(
       this.call(aNativeWindow, "styleMask", this.objc.sendULong)
     );
@@ -975,10 +1230,33 @@ const Cocoa = {
       aNativeWindow,
       "setStyleMask:",
       this.objc.sendWithULong,
-      aValue
-        ? mask | NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL
-        : mask & ~NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL
+      aValue ? mask | aStyle : mask & ~aStyle
     );
+  },
+
+  // Gecko's windows keep this style even though they aren't panels.
+  setNonActivating(aNativeWindow, aValue) {
+    this.setStyle(
+      aNativeWindow,
+      NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL,
+      aValue
+    );
+  },
+
+  // A search bar has no window buttons, and keeps the size it is given.
+  styleAsSearchBar(aNativeWindow, aValue) {
+    for (const kind of NS_WINDOW_BUTTONS) {
+      const button = this.call(
+        aNativeWindow,
+        "standardWindowButton:",
+        this.objc.sendIdWithULong,
+        kind
+      );
+      if (!button.isNull()) {
+        this.call(button, "setHidden:", this.objc.sendWithBool, aValue ? 1 : 0);
+      }
+    }
+    this.setStyle(aNativeWindow, NS_WINDOW_STYLE_MASK_RESIZABLE, !aValue);
   },
 
   /** @returns {{x: number, y: number, width: number, height: number}} */
@@ -1045,6 +1323,37 @@ const Cocoa = {
     } finally {
       this.call(context, "endGrouping", this.objc.send);
     }
+  },
+
+  /**
+   * The Space in use, on the screen with the menu bar. Through a private
+   * call, which tools for Spaces have long relied on: AppKit has none.
+   *
+   * @returns {string}
+   */
+  activeSpace() {
+    if (!this._skyLight) {
+      const { ctypes } = lazy;
+      // Open for as long as the app runs.
+      const lib = ctypes.open(
+        "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+      );
+      this._skyLight = {
+        mainConnection: lib.declare(
+          "CGSMainConnectionID",
+          ctypes.default_abi,
+          ctypes.int32_t
+        ),
+        activeSpace: lib.declare(
+          "CGSGetActiveSpace",
+          ctypes.default_abi,
+          ctypes.uint64_t,
+          ctypes.int32_t
+        ),
+      };
+    }
+    const { mainConnection, activeSpace } = this._skyLight;
+    return String(activeSpace(mainConnection()));
   },
 
   // Lets a window go past the top of its screen, which AppKit doesn't let

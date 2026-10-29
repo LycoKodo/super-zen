@@ -181,3 +181,6 @@ zen-little-window-space-button =
 zen-little-window-open-in-label = Open in
 zen-little-window-open-in-menu =
     .title = Open in another space
+# The button that puts away the search bar a little window starts as.
+zen-little-window-search-close =
+    .title = Close

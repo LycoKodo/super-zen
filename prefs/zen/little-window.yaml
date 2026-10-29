@@ -31,3 +31,8 @@
 # once instead of starting up first.
 - name: zen.little-window.preload
   value: true
+
+# On macOS, a little window opened without a page asks where to go first, in
+# a small search bar, like Little Arc.
+- name: zen.little-window.search-first
+  value: true

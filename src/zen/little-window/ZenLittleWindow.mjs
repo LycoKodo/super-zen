@@ -12,6 +12,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
 });
 
 const LITTLE_WINDOW_ATTR = "zen-little-window";
+const SEARCH_BAR_ATTR = "zen-little-window-search-bar";
 
 // Little Arc's corners, tighter than the 16px macOS gives windows like these.
 const MAC_CORNER_RADIUS = 14;
@@ -32,6 +33,8 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   #replacingTab = false;
   #openedInSpace = false;
   #slidOut = false;
+  // Set while the window shows as a search bar, see #startSearchBar.
+  #searchBarObserver = null;
 
   constructor() {
     super();
@@ -52,6 +55,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       );
       if (this.isSpare) {
         root.setAttribute("zen-little-window-spare", "true");
+      }
+      if (window._zenLittleWindow.searchFirst) {
+        root.setAttribute(SEARCH_BAR_ATTR, "true");
       }
     }
   }
@@ -345,6 +351,31 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
   }
 
   #onKeyDown(event) {
+    // Escape puts the search bar away, unless it leaves a search mode.
+    if (
+      event.key === "Escape" &&
+      this.#inSearchBar &&
+      !gURLBar.searchMode &&
+      !event.defaultPrevented
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.close();
+      return;
+    }
+    // Before anything is typed, the first site suggested stands out, and
+    // Enter opens it.
+    if (
+      event.key === "Enter" &&
+      this.#inSearchBar &&
+      !gURLBar.value &&
+      gURLBar.view.isOpen &&
+      gURLBar.view.visibleRowCount &&
+      gURLBar.view.selectedRowIndex < 0
+    ) {
+      gURLBar.view.selectedRowIndex = 0;
+      return;
+    }
     const accel =
       AppConstants.platform === "macosx" ? event.metaKey : event.ctrlKey;
     const otherModifiers =
@@ -367,6 +398,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     this.#initialTab = gBrowser.selectedTab;
     // Spaces are only known once the window has fully started.
     this.#updateToolbar();
+    this.#addSearchBarCloseButton();
     if (this.isSpare) {
       lazy.ZenLittleWindows.spareReady(window);
       return;
@@ -381,10 +413,22 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
    * @param {string} [options.url]
    * @param {string} [options.spaceId]
    * @param {nsIPrincipal} [options.triggeringPrincipal]
+   * @param {boolean} [options.searchFirst] - Start as a search bar.
    */
-  takeOver({ url = null, spaceId = null, triggeringPrincipal = null }) {
-    window._zenLittleWindow = { spaceId, url, triggeringPrincipal };
+  takeOver({
+    url = null,
+    spaceId = null,
+    triggeringPrincipal = null,
+    searchFirst = false,
+  }) {
+    window._zenLittleWindow = {
+      spaceId,
+      url,
+      triggeringPrincipal,
+      searchFirst,
+    };
     document.documentElement.removeAttribute("zen-little-window-spare");
+    document.documentElement.toggleAttribute(SEARCH_BAR_ATTR, searchFirst);
     this.#targetSpaceId = spaceId;
     this.#updateToolbar();
     this.#start();
@@ -402,6 +446,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
           Services.scriptSecurityManager.getSystemPrincipal(),
       });
     } else {
+      if (window._zenLittleWindow.searchFirst) {
+        this.#startSearchBar();
+      }
       // Ask where to go straight away. The page takes focus once the window
       // gets activated and once it finishes loading, so ask again then.
       const openLocation = () => this.askForLocation();
@@ -437,7 +484,11 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     const start = Date.now();
     let steadyChecks = 0;
     const check = () => {
-      const settled = !!window._zenLittleWindow.url || gURLBar.focused;
+      let settled = !!window._zenLittleWindow.url || gURLBar.focused;
+      if (settled && this.#inSearchBar) {
+        settled =
+          gURLBar.hasAttribute("breakout-extend") && this.#fitSearchBar();
+      }
       steadyChecks = settled ? steadyChecks + 1 : 0;
       if (steadyChecks >= 2 || Date.now() - start > 600) {
         lazy.ZenLittleWindows.reveal(window);
@@ -457,13 +508,100 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
       return;
     }
     setTimeout(() => {
-      if (
-        !gURLBar.focused &&
-        gBrowser.selectedBrowser.currentURI.spec === "about:blank"
-      ) {
+      if (gBrowser.selectedBrowser.currentURI.spec !== "about:blank") {
+        return;
+      }
+      if (!gURLBar.focused) {
         document.getElementById("Browser:OpenLocation").doCommand();
+      } else if (this.#inSearchBar && !gURLBar.view.isOpen) {
+        // A new window focuses its address bar itself, without results.
+        gURLBar.startQuery();
       }
     }, 0);
+  }
+
+  // Section: search bar
+
+  get #inSearchBar() {
+    return document.documentElement.hasAttribute(SEARCH_BAR_ATTR);
+  }
+
+  /**
+   * Starts as a search bar, as Little Arc does from another app: only the
+   * address bar shows, with its results, and the window fits them. Picking
+   * a page turns it into the little window. Escape and the close button put
+   * it away, as does going to another window (see ZenLittleWindows).
+   */
+  #startSearchBar() {
+    this.#searchBarObserver = {
+      resize: new ResizeObserver(() => this.#fitSearchBar()),
+      navigation: () => {
+        // Any address bar tells when it starts loading a page, and this one
+        // only stays focused while the search bar is the window in use.
+        if (gURLBar.focused) {
+          this.#leaveSearchBar();
+        }
+      },
+    };
+    this.#searchBarObserver.resize.observe(gURLBar);
+    Services.obs.addObserver(
+      this.#searchBarObserver.navigation,
+      "urlbar-user-start-navigation"
+    );
+  }
+
+  #stopSearchBar() {
+    if (!this.#searchBarObserver) {
+      return;
+    }
+    this.#searchBarObserver.resize.disconnect();
+    Services.obs.removeObserver(
+      this.#searchBarObserver.navigation,
+      "urlbar-user-start-navigation"
+    );
+    this.#searchBarObserver = null;
+  }
+
+  #leaveSearchBar() {
+    this.#stopSearchBar();
+    lazy.ZenLittleWindows.expandSearchBar(window);
+    document.documentElement.removeAttribute(SEARCH_BAR_ATTR);
+  }
+
+  /**
+   * Makes the window as tall as the address bar with its results. Resized
+   * from its top, so it grows downwards.
+   *
+   * @returns {boolean} Whether it was that tall already. It may not get
+   *   there at once: the smallest size a window takes only follows its
+   *   styles once they are applied.
+   */
+  #fitSearchBar() {
+    if (!this.#inSearchBar || !gURLBar.hasAttribute("breakout-extend")) {
+      return false;
+    }
+    const height = Math.ceil(
+      window.windowUtils.getBoundsWithoutFlushing(gURLBar).height
+    );
+    if (height <= 0 || height === window.innerHeight) {
+      return true;
+    }
+    window.resizeBy(0, height - window.innerHeight);
+    return false;
+  }
+
+  #addSearchBarCloseButton() {
+    const button = document.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "button"
+    );
+    button.id = "zen-little-window-search-close";
+    button.setAttribute("tabindex", "-1");
+    document.l10n.setAttributes(button, "zen-little-window-search-close");
+    // Keeps the address bar focused, and its results open.
+    button.addEventListener("mousedown", event => event.preventDefault());
+    button.addEventListener("click", () => window.close());
+    gURLBar.querySelector(".urlbar-input-container").append(button);
   }
 
   #saveBoundsTimer = null;
@@ -496,6 +634,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     if (this.isSpare) {
       return;
     }
+    if (event.type === "unload") {
+      this.#stopSearchBar();
+    }
     // Saved as closing starts instead, before the window slides away.
     if (event.type === "unload" && !this.#slidOut) {
       lazy.ZenLittleWindows.saveBounds(window);
@@ -516,7 +657,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     event.preventDefault();
     lazy.ZenLittleWindows.saveBounds(window);
     this.#slidOut = true;
-    lazy.ZenLittleWindows.slideOut(window, () => {
+    lazy.ZenLittleWindows.hide(window, () => {
       if (wentBack) {
         lazy.ZenLittleWindows.whenAppInactive(() => window.close());
       } else {

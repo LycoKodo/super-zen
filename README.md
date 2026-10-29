@@ -17,7 +17,7 @@ For everyone moving off Arc now that it's being sunset.
 
 Super Zen is Zen 1.23.4b (Firefox 159) with three additions:
 
-- **Little windows**: Arc's Little Arc. Press <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> in any app and a small browser window slides down over it, even over a fullscreen app. Look something up, then close it and you're back where you were, or send the page to a space.
+- **Little windows**: Arc's Little Arc. Press <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> in any app and a search bar fades in over it, even over a fullscreen app. Pick a page and a small browser window slides down with it. Look something up, then close it and you're back where you were, or send the page to a space.
 - **Arc import**: brings over every Arc profile with its history, passwords, payment cards, cookies (so you stay signed in), spaces, pinned tabs and favorites.
 - **Normal Zen sync**: sign in with your Mozilla account, exactly as in Zen.
 
@@ -43,17 +43,18 @@ Super Zen is a separate app with its own profile, so it runs side by side with Z
 
 | | |
 | --- | --- |
-| Open one | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> from any app while Super Zen is running, or **File › New Little Window** |
-| Go somewhere | The address bar is already open: type a URL or a search |
+| Open one | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> from any app while Super Zen is running, or **File › New Little Window**. A search bar fades in first, like Little Arc's |
+| Go somewhere | Type a URL or a search, or pick one of the sites you visit most. <kbd>Enter</kbd> opens the highlighted one, and the little window slides in with it |
+| Never mind | <kbd>Esc</kbd>, the ✕ or <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> again takes you back to the app you were in. Clicking anywhere else puts it away too |
 | Pick its space | The space button in the toolbar shows where the page will go. Click it to choose another |
 | Keep the page | **Open in _Space_** or <kbd>⌘</kbd><kbd>O</kbd> moves it into that space in your main window |
 | Close it | <kbd>⌘</kbd><kbd>W</kbd>. It slides back up and you're returned to the app you were in |
 
 - **Works everywhere.** It opens on whatever desktop or fullscreen app you're in, without switching Spaces or bringing your main window forward.
-- **Feels instant.** One little window is kept ready, hidden. It shows up in about 70 ms and slides down from under the menu bar like a Hyprland dropdown terminal, with a small bounce.
+- **Feels instant.** One little window is kept ready, hidden. The search bar shows up in about 40 ms, and the window slides down from under the menu bar like a Hyprland dropdown terminal, with a small bounce.
 - **Remembers itself.** Move or resize one, and the next opens in the same place and size.
 - **Links from other apps** (Mail, Slack, …) open in a little window too, like in Arc.
-- **Cyber theme**: sky blue and white with cyan glows, after Blue Archive. Switch to `space` to use your space's own colors, like Little Arc.
+- **Cyber theme**: sky blue and white with cyan glows and slanted tags, after Blue Archive, on the search bar and the window. Switch to `space` to use your space's own colors, like Little Arc.
 
 ### Settings
 
@@ -65,6 +66,7 @@ The rest live in `about:config`:
 | --- | --- | --- |
 | `zen.little-window.enabled` | `true` | Little windows at all |
 | `zen.little-window.global-shortcut` | `true` | The shortcut works from any app (macOS) |
+| `zen.little-window.search-first` | `true` | Ask where to go in a search bar first, like Little Arc. Off: the window opens at once, with its address bar open |
 | `zen.little-window.open-external-links` | `true` | Links from other apps open in a little window |
 | `zen.little-window.theme` | `cyber` | `cyber`, or `space` for the space's colors |
 | `zen.little-window.preload` | `true` | Keep one ready so it opens at once. Turn off to save a little memory |
@@ -91,7 +93,7 @@ Super Zen uses Firefox Sync, like Zen. Sign in with your Mozilla account in **Se
 - **macOS on Apple Silicon only** for the prebuilt app. Little windows opening from other apps is macOS only.
 - **No DRM video.** Netflix, Disney+, Spotify's web player and some course video players won't play. Widevine only runs in browsers Google has signed, which a personal build can't be.
 - **Arc takes <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd>** while it's running. Quit Arc, or pick another shortcut.
-- The first little window on a desktop or fullscreen app you haven't used one on opens at normal speed (about a third of a second). After that, one is kept ready there.
+- The first search bar on a desktop or fullscreen app you haven't used one on opens at normal speed (about a third of a second). After that, one is kept ready there.
 
 ## Building from source
 
