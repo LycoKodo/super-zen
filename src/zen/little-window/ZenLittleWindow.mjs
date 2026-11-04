@@ -12,6 +12,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
 });
 
 const LITTLE_WINDOW_ATTR = "zen-little-window";
+// How far a press moves before it is a drag, in pixels.
+const DRAG_THRESHOLD = 3;
 const SEARCH_BAR_ATTR = "zen-little-window-search-bar";
 
 // Little Arc's corners, tighter than the 16px macOS gives windows like these.
@@ -78,6 +80,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
 
   init() {
     if (!this.isLittleWindow) {
+      lazy.ZenLittleWindows.watchShortcut(window);
       return;
     }
     this.#targetSpaceId = window._zenLittleWindow.spaceId;
@@ -89,6 +92,7 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     window.addEventListener("resize", this);
     // Closing starts with "DOMWindowClose" from a script (Accel+W) and with
     // "close" from the window's close button.
+    window.addEventListener("pointerdown", this, true);
     window.addEventListener("DOMWindowClose", this);
     window.addEventListener("close", this);
     window.addEventListener("unload", this, { once: true });
@@ -604,6 +608,76 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
     gURLBar.querySelector(".urlbar-input-container").append(button);
   }
 
+  // Section: moving
+
+  /**
+   * Moves the window when the parts of it marked for that are dragged over a
+   * fullscreen app. macOS moves it itself everywhere else, but not in a
+   * fullscreen app's Space, where it only lets the window be moved.
+   *
+   * @param {PointerEvent} event
+   */
+  #onPointerDown(event) {
+    if (
+      event.button !== 0 ||
+      !this.#isDragHandle(event.target) ||
+      !lazy.ZenLittleWindows.overFullscreenApp
+    ) {
+      return;
+    }
+    // Keeps the address bar focused, and the page from seeing the press.
+    event.preventDefault();
+    event.stopPropagation();
+    const handle = event.target;
+    handle.setPointerCapture(event.pointerId);
+    const start = { x: event.screenX, y: event.screenY };
+    const from = { x: window.screenX, y: window.screenY };
+    let moved = false;
+    const onMove = moveEvent => {
+      const dx = moveEvent.screenX - start.x;
+      const dy = moveEvent.screenY - start.y;
+      moved ||= Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD;
+      if (moved) {
+        window.moveTo(from.x + dx, from.y + dy);
+      }
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("lostpointercapture", onUp);
+      // What a press without a drag does, like opening a menu, doesn't
+      // follow a drag.
+      if (moved) {
+        window.addEventListener(
+          "click",
+          stopClick => stopClick.stopPropagation(),
+          {
+            capture: true,
+            once: true,
+          }
+        );
+      }
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("lostpointercapture", onUp);
+  }
+
+  // The parts marked with -moz-window-dragging: the search row of the search
+  // bar, around the text, and the toolbar, around its buttons and address.
+  #isDragHandle(aTarget) {
+    if (this.#inSearchBar) {
+      return (
+        !!aTarget.closest?.(".urlbar-input-container") &&
+        !aTarget.closest(".urlbar-input, #zen-little-window-search-close")
+      );
+    }
+    return (
+      !!aTarget.closest?.("#nav-bar") &&
+      !aTarget.closest(
+        "#urlbar, button, toolbarbutton, #zen-little-window-space-button, #zen-little-window-open-in"
+      )
+    );
+  }
+
   #saveBoundsTimer = null;
 
   handleEvent(event) {
@@ -620,6 +694,9 @@ class nsZenLittleWindow extends nsZenDOMOperatedFeature {
         break;
       case "keydown":
         this.#onKeyDown(event);
+        break;
+      case "pointerdown":
+        this.#onPointerDown(event);
         break;
       case "DOMWindowClose":
       case "close":

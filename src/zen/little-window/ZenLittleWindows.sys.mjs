@@ -76,7 +76,6 @@ class nsZenLittleWindows {
         if (
           !aSubject.document.documentElement.hasAttribute("zen-little-window")
         ) {
-          this.#watchShortcut(aSubject);
           this.#scheduleSpare(SPARE_AFTER_STARTUP_MS);
         }
         break;
@@ -611,15 +610,36 @@ class nsZenLittleWindows {
     }
   }
 
+  /**
+   * Whether the Space in use is a fullscreen app's. Dragging the parts of a
+   * window marked for it doesn't move the window there, see
+   * nsZenLittleWindow.
+   *
+   * @returns {boolean}
+   */
+  get overFullscreenApp() {
+    if (!IS_MAC) {
+      return false;
+    }
+    try {
+      return Cocoa.activeSpaceIsFullscreen();
+    } catch (ex) {
+      console.error("Little windows: could not tell the Space in use", ex);
+      return false;
+    }
+  }
+
   // Section: opening from any app
 
   /**
-   * The shortcut for little windows is a <key>, which about:keyboard changes
-   * in every window alike, by its attributes.
+   * Called by every regular window as it starts, which also starts this
+   * module in time to keep a little window ready. The shortcut for little
+   * windows is a <key>, which about:keyboard changes in every window alike,
+   * by its attributes.
    *
    * @param {Window} aWindow
    */
-  #watchShortcut(aWindow) {
+  watchShortcut(aWindow) {
     const key = aWindow.document.getElementById(SHORTCUT_KEY_ID);
     if (!key) {
       return;
@@ -1211,6 +1231,7 @@ class MacHotKey {
   }
 }
 
+const CGS_SPACE_FULLSCREEN = 4;
 const NS_WINDOW_STYLE_MASK_RESIZABLE = 1 << 3;
 const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL = 1 << 7;
 const NS_WINDOW_BUTTONS = [0, 1, 2]; // Close, minimize and zoom.
@@ -1450,10 +1471,26 @@ const Cocoa = {
           ctypes.uint64_t,
           ctypes.int32_t
         ),
+        spaceType: lib.declare(
+          "CGSSpaceGetType",
+          ctypes.default_abi,
+          ctypes.int32_t,
+          ctypes.int32_t,
+          ctypes.uint64_t
+        ),
       };
     }
     const { mainConnection, activeSpace } = this._skyLight;
     return String(activeSpace(mainConnection()));
+  },
+
+  activeSpaceIsFullscreen() {
+    this.activeSpace();
+    const { mainConnection, activeSpace, spaceType } = this._skyLight;
+    const connection = mainConnection();
+    return (
+      spaceType(connection, activeSpace(connection)) === CGS_SPACE_FULLSCREEN
+    );
   },
 
   // Sends the changes made to windows so far to the screen.
