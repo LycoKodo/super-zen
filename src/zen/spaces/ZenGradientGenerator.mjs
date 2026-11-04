@@ -215,7 +215,7 @@ export class nsZenThemePicker extends nsZenMultiWindowFeature {
                   data-lazy-l10n-id="zen-workspaces-change-theme"
                   command="cmd_zenOpenZenThemePicker"/>
       `);
-    document.getElementById("toolbar-context-customize").before(menu);
+    document.getElementById("zen-toolbar-context-set-profile").before(menu);
   }
 
   openThemePicker(event) {
@@ -1345,7 +1345,16 @@ export class nsZenThemePicker extends nsZenMultiWindowFeature {
     if (themedColors.length === 0) {
       const getBrowserBg = () => {
         if (this.canBeTransparent) {
-          return this.isDarkMode ? "rgba(0, 0, 0, 0.4)" : "transparent";
+          if (this.isDarkMode) {
+            return "rgba(0, 0, 0, 0.4)";
+          }
+          // On macOS (vibrancy) and Windows (Mica) a transparent light background
+          // sits over a compositor material that keeps UI text readable. Linux has no
+          // such material when zen.widget.linux.transparency is enabled, so a fully
+          // transparent light theme leaves dark UI text unreadable (gh-15334).
+          return AppConstants.platform === "linux"
+            ? "rgba(255, 255, 255, 0.4)"
+            : "transparent";
         }
         return this.isDarkMode ? "#131313" : "#e9e9e9";
       };
@@ -1521,7 +1530,7 @@ export class nsZenThemePicker extends nsZenMultiWindowFeature {
       baseColor = this.blendColors(
         accentColor,
         baseColor.slice(0, 3),
-        this.canBeTransparent ? 25 : 5
+        this.canBeTransparent ? 20 : 5
       ).concat(opacity);
     }
     return baseColor;
@@ -2118,7 +2127,7 @@ export class nsZenThemePicker extends nsZenMultiWindowFeature {
       isDarkMode,
       isExplicitMode,
       toolbarColor: this.getToolbarColor(isDarkMode, primaryColor),
-      primaryColor: primaryColor,
+      primaryColor,
     };
     this.currentOpacity = previousOpacity;
     this.#currentLightness = previousLightness;

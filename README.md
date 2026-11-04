@@ -15,7 +15,7 @@ For everyone moving off Arc now that it's being sunset.
 
 <br clear="left">
 
-Super Zen is Zen 1.23.4b (Firefox 159) with three additions:
+Super Zen is Zen 1.24b (Firefox 159) with three additions:
 
 - **Little windows**: Arc's Little Arc. Press <kbd>⌘</kbd><kbd>⌥</kbd><kbd>N</kbd> in any app and a search bar fades in over it, even over a fullscreen app. Pick a page and a small browser window slides down with it. Look something up, then close it and you're back where you were, or send the page to a space.
 - **Arc import**: brings over every Arc profile with its history, passwords, payment cards, cookies (so you stay signed in), spaces, pinned tabs and favorites.
@@ -37,7 +37,7 @@ Everything else is Zen, unchanged.
 
 Super Zen is a separate app with its own profile, so it runs side by side with Zen, Firefox or Arc.
 
-**Updates**: Super Zen doesn't update itself, and won't turn into regular Zen. Download new versions from [Releases](https://github.com/LycoKodo/super-zen/releases).
+**Updates**: Super Zen doesn't update itself, and won't turn into regular Zen: it checks this repository for updates, not Zen's servers, so it never offers you Zen's. Download new versions from [Releases](https://github.com/LycoKodo/super-zen/releases).
 
 ## Little windows
 

@@ -630,6 +630,7 @@ zen-library {
         height: var(--size-item-small);
         width: var(--size-item-small);
         padding: 0 !important;
+        margin-inline: 2px;
       }
 
       &:is([open], [checked]) {
@@ -1109,6 +1110,38 @@ zen-library {
       background: var(--tab-background-color-selected) !important;
       color: var(--tab-text-color-selected);
       box-shadow: var(--tab-box-shadow-selected);
+    }
+
+    & .toolbarbutton-text {
+      transition: transform 0.1s ease-in-out;
+    }
+
+    & .zen-newtab-sublabel-anchor {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: block;
+    }
+
+    & .zen-tab-sublabel {
+      display: block !important;
+      inset-inline-start: 36px;
+      width: calc(100% - 38px) !important;
+      text-align: start;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    &[zen-paste-and-search] {
+      & .toolbarbutton-text {
+        transform: translateY(-6px);
+      }
+
+      & .zen-tab-sublabel {
+        opacity: 0.6;
+        transform: translateY(-6px);
+      }
     }
   }
 
