@@ -58,7 +58,7 @@ Super Zen is a separate app with its own profile, so it runs side by side with Z
 
 ### Settings
 
-Change the shortcut in **Settings › Keyboard Shortcuts › New Little Window**. It works from other apps when it includes <kbd>⌘</kbd> or <kbd>Ctrl</kbd>.
+Change the shortcut in `about:keyboard`, under **New Little Window**. It works from other apps when it includes <kbd>⌘</kbd> or <kbd>Ctrl</kbd>.
 
 The rest live in `about:config`:
 
