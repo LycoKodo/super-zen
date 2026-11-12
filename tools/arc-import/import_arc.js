@@ -383,14 +383,22 @@ async function importProfileData(migrator, profile) {
     }
   }
 
-  // Spaces, each in its profile's container.
+  // Spaces and favorites, each Arc profile's in its container.
   if (options.spaces && !progress.spaces) {
-    for (const space of plan.spaces) {
-      // Spaces without a profile of their own use Arc's default one.
-      space.userContextId = containerFor.get(space.profile ?? "Default") ?? 0;
-    }
     try {
-      report.spaces = await ZenMigrationUtils.applyArcSidebar(plan);
+      report.spaces = 0;
+      const profileIds = new Set(
+        [...plan.spaces, ...plan.favorites].map(
+          entry => entry.profile ?? "Default"
+        )
+      );
+      for (const profileId of profileIds) {
+        report.spaces += await ZenMigrationUtils.applyArcSidebar(
+          ZenMigrationUtils.filterArcPlan(plan, profileId),
+          undefined,
+          { containerTabId: containerFor.get(profileId) ?? 0 }
+        );
+      }
       progress.spaces = true;
       saveProgress();
     } catch (ex) {

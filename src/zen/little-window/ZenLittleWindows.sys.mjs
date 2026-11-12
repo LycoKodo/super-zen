@@ -23,6 +23,7 @@ const PRELOAD_PREF = "zen.little-window.preload";
 const SEARCH_FIRST_PREF = "zen.little-window.search-first";
 const POSITION_PREF = "zen.little-window.position";
 const SEARCH_BAR_POSITION_PREF = "zen.little-window.search-bar-position";
+const SHORTCUT_KEY_ID = "zen-little-window";
 
 /**
  * What little windows share across windows: opening them, where they open,
@@ -609,27 +610,77 @@ class nsZenLittleWindows {
     }
   }
 
+  /**
+   * Whether the Space in use is a fullscreen app's. Dragging the parts of a
+   * window marked for it doesn't move the window there, see
+   * nsZenLittleWindow.
+   *
+   * @returns {boolean}
+   */
+  get overFullscreenApp() {
+    if (!IS_MAC) {
+      return false;
+    }
+    try {
+      return Cocoa.activeSpaceIsFullscreen();
+    } catch (ex) {
+      console.error("Little windows: could not tell the Space in use", ex);
+      return false;
+    }
+  }
+
   // Section: opening from any app
+
+  /**
+   * Called by every regular window as it starts, which also starts this
+   * module in time to keep a little window ready. The shortcut for little
+   * windows is a <key>, which about:keyboard changes in every window alike,
+   * by its attributes.
+   *
+   * @param {Window} aWindow
+   */
+  watchShortcut(aWindow) {
+    const key = aWindow.document.getElementById(SHORTCUT_KEY_ID);
+    if (!key) {
+      return;
+    }
+    this.setGlobalShortcut(key);
+    new aWindow.MutationObserver(() => this.setGlobalShortcut(key)).observe(
+      key,
+      { attributeFilter: ["key", "keycode", "modifiers", "disabled"] }
+    );
+  }
 
   /**
    * Makes the shortcut for little windows work from any app, as Little Arc's
    * does. Only on macOS, and only for shortcuts with Command or Control, so
    * typing in other apps is never taken over.
    *
-   * @param {object|null} aShortcut - The shortcut, as KeyShortcut.toJSONForm
-   *   gives it, or null for none.
+   * @param {Element|null} aKey - The <key> for little windows.
    */
-  setGlobalShortcut(aShortcut) {
+  setGlobalShortcut(aKey) {
     if (AppConstants.platform !== "macosx") {
       return;
     }
     this.#globalShortcut = null;
-    const key = ((!aShortcut?.disabled && aShortcut?.key) || "").toLowerCase();
+    const key = (
+      (aKey?.getAttribute("disabled") !== "true" &&
+        aKey?.getAttribute("key")) ||
+      ""
+    ).toLowerCase();
     const keyCode = key.length === 1 ? MAC_KEY_CODES.indexOf(key) : -1;
     if (keyCode !== -1) {
-      const { accel, meta, control, alt, shift } = aShortcut.modifiers ?? {};
+      const names = new Set(
+        (aKey.getAttribute("modifiers") ?? "")
+          .split(",")
+          .map(name => name.trim())
+      );
+      const accel = names.has("accel") || names.has("meta");
+      const [control, alt, shift] = ["control", "alt", "shift"].map(name =>
+        names.has(name)
+      );
       const modifiers =
-        (accel || meta ? CARBON_CMD_KEY : 0) |
+        (accel ? CARBON_CMD_KEY : 0) |
         (control ? CARBON_CONTROL_KEY : 0) |
         (alt ? CARBON_OPTION_KEY : 0) |
         (shift ? CARBON_SHIFT_KEY : 0);
@@ -1180,6 +1231,7 @@ class MacHotKey {
   }
 }
 
+const CGS_SPACE_FULLSCREEN = 4;
 const NS_WINDOW_STYLE_MASK_RESIZABLE = 1 << 3;
 const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL = 1 << 7;
 const NS_WINDOW_BUTTONS = [0, 1, 2]; // Close, minimize and zoom.
@@ -1419,10 +1471,26 @@ const Cocoa = {
           ctypes.uint64_t,
           ctypes.int32_t
         ),
+        spaceType: lib.declare(
+          "CGSSpaceGetType",
+          ctypes.default_abi,
+          ctypes.int32_t,
+          ctypes.int32_t,
+          ctypes.uint64_t
+        ),
       };
     }
     const { mainConnection, activeSpace } = this._skyLight;
     return String(activeSpace(mainConnection()));
+  },
+
+  activeSpaceIsFullscreen() {
+    this.activeSpace();
+    const { mainConnection, activeSpace, spaceType } = this._skyLight;
+    const connection = mainConnection();
+    return (
+      spaceType(connection, activeSpace(connection)) === CGS_SPACE_FULLSCREEN
+    );
   },
 
   // Sends the changes made to windows so far to the screen.
